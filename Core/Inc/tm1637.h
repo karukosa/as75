@@ -8,8 +8,22 @@
 #ifndef INC_TM1637_H_
 #define INC_TM1637_H_
 
-void tm1637Init(void);
-void tm1637DisplayDecimal(int v, int displaySeparator);
-void tm1637SetBrightness(char brightness);
+#include "main.h"
+
+typedef enum {
+    TM1637_DISPLAY_1 = 0,
+    TM1637_DISPLAY_2 = 1
+} TM1637Display;
+
+typedef struct {
+    GPIO_TypeDef *clkPort;
+    uint16_t clkPin;
+    GPIO_TypeDef *dioPort;
+    uint16_t dioPin;
+} TM1637Handle;
+
+void tm1637Init(TM1637Handle *handle, TM1637Display display);
+void tm1637DisplayDecimal(TM1637Handle *handle, int v, int displaySeparator);
+void tm1637SetBrightness(TM1637Handle *handle, char brightness);
 
 #endif /* INC_TM1637_H_ */

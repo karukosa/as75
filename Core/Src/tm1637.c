@@ -8,163 +8,200 @@
 #include "tm1637.h"
 
 
-void _tm1637Start(void);
-void _tm1637Stop(void);
-void _tm1637ReadResult(void);
-void _tm1637WriteByte(unsigned char b);
-void _tm1637DelayUsec(unsigned int i);
-void _tm1637ClkHigh(void);
-void _tm1637ClkLow(void);
-void _tm1637DioHigh(void);
-void _tm1637DioLow(void);
+static void tm1637Start(TM1637Handle *handle);
+static void tm1637Stop(TM1637Handle *handle);
+static void tm1637ReadResult(TM1637Handle *handle);
+static void tm1637WriteByte(TM1637Handle *handle, uint8_t b);
+static void tm1637DelayUsec(unsigned int i);
+static void tm1637ClkHigh(TM1637Handle *handle);
+static void tm1637ClkLow(TM1637Handle *handle);
+static void tm1637DioHigh(TM1637Handle *handle);
+static void tm1637DioLow(TM1637Handle *handle);
+static void tm1637AssignPins(TM1637Handle *handle, TM1637Display display);
 
-// Configuration.
-
-#define CLK_PORT GPIOC
-#define DIO_PORT GPIOC
-#define CLK_PIN GPIO_PIN_0
-#define DIO_PIN GPIO_PIN_1
-#define CLK_PORT_CLK_ENABLE __HAL_RCC_GPIOC_CLK_ENABLE
-#define DIO_PORT_CLK_ENABLE __HAL_RCC_GPIOC_CLK_ENABLE
-
-
-const char segmentMap[] = {
+static const uint8_t segmentMap[] = {
     0x3f, 0x06, 0x5b, 0x4f, 0x66, 0x6d, 0x7d, 0x07, // 0-7
     0x7f, 0x6f, 0x77, 0x7c, 0x39, 0x5e, 0x79, 0x71, // 8-9, A-F
     0x00
 };
 
-
-void tm1637Init(void)
+void tm1637Init(TM1637Handle *handle, TM1637Display display)
 {
-    CLK_PORT_CLK_ENABLE();
-    DIO_PORT_CLK_ENABLE();
     GPIO_InitTypeDef g = {0};
+
+    if (handle == NULL) {
+        return;
+    }
+
+    tm1637AssignPins(handle, display);
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+
     g.Pull = GPIO_PULLUP;
     g.Mode = GPIO_MODE_OUTPUT_OD; // OD = open drain
     g.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-    g.Pin = CLK_PIN;
-    HAL_GPIO_Init(CLK_PORT, &g);
-    g.Pin = DIO_PIN;
-    HAL_GPIO_Init(DIO_PORT, &g);
 
-    tm1637SetBrightness(8);
+    g.Pin = handle->clkPin;
+    HAL_GPIO_Init(handle->clkPort, &g);
+
+    g.Pin = handle->dioPin;
+    HAL_GPIO_Init(handle->dioPort, &g);
+
+    tm1637SetBrightness(handle, 8);
 }
 
-void tm1637DisplayDecimal(int v, int displaySeparator)
+void tm1637DisplayDecimal(TM1637Handle *handle, int v, int displaySeparator)
 {
-    unsigned char digitArr[4];
+    uint8_t digitArr[4];
+
+    if (handle == NULL) {
+        return;
+    }
+
+    if (v < 0) {
+        v = 0;
+    }
+    else if (v > 9999) {
+        v = 9999;
+    }
+
     for (int i = 0; i < 4; ++i) {
         digitArr[i] = segmentMap[v % 10];
         if (i == 2 && displaySeparator) {
-            digitArr[i] |= 1 << 7;
+            digitArr[i] |= 1U << 7;
         }
         v /= 10;
     }
 
-    _tm1637Start();
-    _tm1637WriteByte(0x40);
-    _tm1637ReadResult();
-    _tm1637Stop();
+    tm1637Start(handle);
+    tm1637WriteByte(handle, 0x40);
+    tm1637ReadResult(handle);
+    tm1637Stop(handle);
 
-    _tm1637Start();
-    _tm1637WriteByte(0xc0);
-    _tm1637ReadResult();
+    tm1637Start(handle);
+    tm1637WriteByte(handle, 0xc0);
+    tm1637ReadResult(handle);
 
     for (int i = 0; i < 4; ++i) {
-        _tm1637WriteByte(digitArr[3 - i]);
-        _tm1637ReadResult();
+        tm1637WriteByte(handle, digitArr[3 - i]);
+        tm1637ReadResult(handle);
     }
 
-    _tm1637Stop();
+    tm1637Stop(handle);
 }
 
 // Valid brightness values: 0 - 8.
 // 0 = display off.
-void tm1637SetBrightness(char brightness)
+void tm1637SetBrightness(TM1637Handle *handle, char brightness)
 {
-    // Brightness command:
-    // 1000 0XXX = display off
-    // 1000 1BBB = display on, brightness 0-7
-    // X = don't care
-    // B = brightness
-    _tm1637Start();
-    _tm1637WriteByte(0x87 + brightness);
-    _tm1637ReadResult();
-    _tm1637Stop();
+    uint8_t command;
+
+    if (handle == NULL) {
+        return;
+    }
+
+    if (brightness <= 0) {
+        command = 0x80;
+    }
+    else {
+        if (brightness > 8) {
+            brightness = 8;
+        }
+        command = 0x88 | (uint8_t)(brightness - 1);
+    }
+
+    tm1637Start(handle);
+    tm1637WriteByte(handle, command);
+    tm1637ReadResult(handle);
+    tm1637Stop(handle);
 }
 
-void _tm1637Start(void)
+static void tm1637Start(TM1637Handle *handle)
 {
-    _tm1637ClkHigh();
-    _tm1637DioHigh();
-    _tm1637DelayUsec(2);
-    _tm1637DioLow();
+    tm1637ClkHigh(handle);
+    tm1637DioHigh(handle);
+    tm1637DelayUsec(2);
+    tm1637DioLow(handle);
 }
 
-void _tm1637Stop(void)
+static void tm1637Stop(TM1637Handle *handle)
 {
-    _tm1637ClkLow();
-    _tm1637DelayUsec(2);
-    _tm1637DioLow();
-    _tm1637DelayUsec(2);
-    _tm1637ClkHigh();
-    _tm1637DelayUsec(2);
-    _tm1637DioHigh();
+    tm1637ClkLow(handle);
+    tm1637DelayUsec(2);
+    tm1637DioLow(handle);
+    tm1637DelayUsec(2);
+    tm1637ClkHigh(handle);
+    tm1637DelayUsec(2);
+    tm1637DioHigh(handle);
 }
 
-void _tm1637ReadResult(void)
+static void tm1637ReadResult(TM1637Handle *handle)
 {
-    _tm1637ClkLow();
-    _tm1637DelayUsec(5);
-    // while (dio); // We're cheating here and not actually reading back the response.
-    _tm1637ClkHigh();
-    _tm1637DelayUsec(2);
-    _tm1637ClkLow();
+    tm1637ClkLow(handle);
+    tm1637DelayUsec(5);
+    // TODO: Read ACK from DIO if you need bus error detection.
+    tm1637ClkHigh(handle);
+    tm1637DelayUsec(2);
+    tm1637ClkLow(handle);
 }
 
-void _tm1637WriteByte(unsigned char b)
+static void tm1637WriteByte(TM1637Handle *handle, uint8_t b)
 {
     for (int i = 0; i < 8; ++i) {
-        _tm1637ClkLow();
-        if (b & 0x01) {
-            _tm1637DioHigh();
+        tm1637ClkLow(handle);
+        if (b & 0x01U) {
+            tm1637DioHigh(handle);
         }
         else {
-            _tm1637DioLow();
+            tm1637DioLow(handle);
         }
-        _tm1637DelayUsec(3);
+        tm1637DelayUsec(3);
         b >>= 1;
-        _tm1637ClkHigh();
-        _tm1637DelayUsec(3);
+        tm1637ClkHigh(handle);
+        tm1637DelayUsec(3);
     }
 }
 
-void _tm1637DelayUsec(unsigned int i)
+static void tm1637DelayUsec(unsigned int i)
 {
-    for (; i>0; i--) {
+    for (; i > 0; i--) {
         for (int j = 0; j < 10; ++j) {
-            __asm__ __volatile__("nop\n\t":::"memory");
+            __asm__ __volatile__("nop\n\t" ::: "memory");
         }
     }
 }
 
-void _tm1637ClkHigh(void)
+static void tm1637ClkHigh(TM1637Handle *handle)
 {
-    HAL_GPIO_WritePin(CLK_PORT, CLK_PIN, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(handle->clkPort, handle->clkPin, GPIO_PIN_SET);
 }
 
-void _tm1637ClkLow(void)
+static void tm1637ClkLow(TM1637Handle *handle)
 {
-    HAL_GPIO_WritePin(CLK_PORT, CLK_PIN, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(handle->clkPort, handle->clkPin, GPIO_PIN_RESET);
 }
 
-void _tm1637DioHigh(void)
+static void tm1637DioHigh(TM1637Handle *handle)
 {
-    HAL_GPIO_WritePin(DIO_PORT, DIO_PIN, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(handle->dioPort, handle->dioPin, GPIO_PIN_SET);
 }
 
-void _tm1637DioLow(void)
+static void tm1637DioLow(TM1637Handle *handle)
 {
-    HAL_GPIO_WritePin(DIO_PORT, DIO_PIN, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(handle->dioPort, handle->dioPin, GPIO_PIN_RESET);
+}
+
+static void tm1637AssignPins(TM1637Handle *handle, TM1637Display display)
+{
+    if (display == TM1637_DISPLAY_2) {
+        handle->clkPort = CLK2_GPIO_Port;
+        handle->clkPin = CLK2_Pin;
+        handle->dioPort = DIO2_GPIO_Port;
+        handle->dioPin = DIO2_Pin;
+    }
+    else {
+        handle->clkPort = CLK1_GPIO_Port;
+        handle->clkPin = CLK1_Pin;
+        handle->dioPort = DIO1_GPIO_Port;
+        handle->dioPin = DIO1_Pin;
+    }
 }

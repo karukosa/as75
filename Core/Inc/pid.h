@@ -30,54 +30,15 @@
 
 	#include "main.h"
 
-	/* --------------- Check Mainstream series --------------- */
-
-	#ifdef STM32F0
-		#include "stm32f0xx_hal.h"       /* Import HAL library */
-	#elif defined(STM32F1)
-		#include "stm32f1xx_hal.h"       /* Import HAL library */
-	#elif defined(STM32F2)
-		#include "stm32f2xx_hal.h"       /* Import HAL library */
-	#elif defined(STM32F3)
-		#include "stm32f3xx_hal.h"       /* Import HAL library */
-	#elif defined(STM32F4)
-		#include "stm32f4xx_hal.h"       /* Import HAL library */
-	#elif defined(STM32F7)
-		#include "stm32f7xx_hal.h"       /* Import HAL library */
-	#elif defined(STM32G0)
-		#include "stm32g0xx_hal.h"       /* Import HAL library */
-	#elif defined(STM32G4)
-		#include "stm32g4xx_hal.h"       /* Import HAL library */
-
-	/* ------------ Check High Performance series ------------ */
-
-	#elif defined(STM32H7)
-		#include "stm32h7xx_hal.h"       /* Import HAL library */
-
-	/* ------------ Check Ultra low power series ------------- */
-
-	#elif defined(STM32L0)
-		#include "stm32l0xx_hal.h"       /* Import HAL library */
-	#elif defined(STM32L1)
-		#include "stm32l1xx_hal.h"       /* Import HAL library */
-	#elif defined(STM32L5)
-		#include "stm32l5xx_hal.h"       /* Import HAL library */
-	#elif defined(STM32L4)
-		#include "stm32l4xx_hal.h"       /* Import HAL library */
-	#elif defined(STM32H7)
-		#include "stm32h7xx_hal.h"       /* Import HAL library */
-	#else
-	#endif /* STM32F1 */
-
 	/* ------------------------------------------------------- */
 
 	#if defined ( __ICCARM__ ) /* ICCARM Compiler */
 
 	#pragma diag_suppress=Pe177   /* Disable 'unused function' warning */
 
-	#elif defined   (  __GNUC__  ) /* GNU Compiler */
+	#elif defined(__GNUC__) /* GNU Compiler */
 
-	#pragma diag_suppress 177     /* Disable 'unused function' warning */
+	#pragma GCC diagnostic ignored "-Wunused-function" /* Disable 'unused function' warning */
 
 	#endif /* __ICCARM__ */
 
