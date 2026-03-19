@@ -14,6 +14,8 @@
   * If no LICENSE file comes with this software, it is provided AS-IS.
   *
   ******************************************************************************
+  * The entire control program below was created in March 2026
+  * By Vu Nam Hung a.k.a. Karukosa using STM32CubdIDE 1.14.1
   */
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/

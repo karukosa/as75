@@ -7,11 +7,11 @@
 
 #include "tm1637.h"
 
-
 static void tm1637Start(TM1637Handle *handle);
 static void tm1637Stop(TM1637Handle *handle);
 static void tm1637ReadResult(TM1637Handle *handle);
 static void tm1637WriteByte(TM1637Handle *handle, uint8_t b);
+static void tm1637WriteSegments(TM1637Handle *handle, const uint8_t segments[4]);
 static void tm1637DelayUsec(unsigned int i);
 static void tm1637ClkHigh(TM1637Handle *handle);
 static void tm1637ClkLow(TM1637Handle *handle);
@@ -51,7 +51,7 @@ void tm1637Init(TM1637Handle *handle, TM1637Display display)
 
 void tm1637DisplayDecimal(TM1637Handle *handle, int v, int displaySeparator)
 {
-    uint8_t digitArr[4];
+    uint8_t segments[4];
 
     if (handle == NULL) {
         return;
@@ -64,29 +64,80 @@ void tm1637DisplayDecimal(TM1637Handle *handle, int v, int displaySeparator)
         v = 9999;
     }
 
-    for (int i = 0; i < 4; ++i) {
-        digitArr[i] = segmentMap[v % 10];
-        if (i == 2 && displaySeparator) {
-            digitArr[i] |= 1U << 7;
-        }
+    for (int pos = 3; pos >= 0; --pos) {
+        segments[pos] = segmentMap[v % 10];
         v /= 10;
     }
 
-    tm1637Start(handle);
-    tm1637WriteByte(handle, 0x40);
-    tm1637ReadResult(handle);
-    tm1637Stop(handle);
-
-    tm1637Start(handle);
-    tm1637WriteByte(handle, 0xc0);
-    tm1637ReadResult(handle);
-
-    for (int i = 0; i < 4; ++i) {
-        tm1637WriteByte(handle, digitArr[3 - i]);
-        tm1637ReadResult(handle);
+    if (displaySeparator) {
+        segments[1] |= 1U << 7;
     }
 
-    tm1637Stop(handle);
+    tm1637WriteSegments(handle, segments);
+}
+
+void tm1637DisplayDecimalTenths(TM1637Handle *handle, int valueTenths)
+{
+    uint8_t segments[4] = {0, 0, 0, 0};
+    int wholePart;
+
+    if (handle == NULL) {
+        return;
+    }
+
+    if (valueTenths < 0) {
+        valueTenths = 0;
+    }
+    else if (valueTenths > 9999) {
+        valueTenths = 9999;
+    }
+
+    wholePart = valueTenths / 10;
+    segments[3] = segmentMap[valueTenths % 10];
+
+    for (int pos = 2; pos >= 0; --pos) {
+        if (wholePart > 0 || pos == 2) {
+            segments[pos] = segmentMap[wholePart % 10];
+            wholePart /= 10;
+        }
+    }
+
+    segments[2] |= 1U << 7;
+    tm1637WriteSegments(handle, segments);
+}
+
+void tm1637DisplayTime(TM1637Handle *handle, int hours, int minutes, int showColon)
+{
+    uint8_t segments[4];
+
+    if (handle == NULL) {
+        return;
+    }
+
+    if (hours < 0) {
+        hours = 0;
+    }
+    else if (hours > 99) {
+        hours = 99;
+    }
+
+    if (minutes < 0) {
+        minutes = 0;
+    }
+    else if (minutes > 99) {
+        minutes = 99;
+    }
+
+    segments[0] = segmentMap[(hours / 10) % 10];
+    segments[1] = segmentMap[hours % 10];
+    segments[2] = segmentMap[(minutes / 10) % 10];
+    segments[3] = segmentMap[minutes % 10];
+
+    if (showColon) {
+        segments[1] |= 1U << 7;
+    }
+
+    tm1637WriteSegments(handle, segments);
 }
 
 // Valid brightness values: 0 - 8.
@@ -159,6 +210,25 @@ static void tm1637WriteByte(TM1637Handle *handle, uint8_t b)
         tm1637ClkHigh(handle);
         tm1637DelayUsec(3);
     }
+}
+
+static void tm1637WriteSegments(TM1637Handle *handle, const uint8_t segments[4])
+{
+    tm1637Start(handle);
+    tm1637WriteByte(handle, 0x40);
+    tm1637ReadResult(handle);
+    tm1637Stop(handle);
+
+    tm1637Start(handle);
+    tm1637WriteByte(handle, 0xc0);
+    tm1637ReadResult(handle);
+
+    for (int i = 0; i < 4; ++i) {
+        tm1637WriteByte(handle, segments[i]);
+        tm1637ReadResult(handle);
+    }
+
+    tm1637Stop(handle);
 }
 
 static void tm1637DelayUsec(unsigned int i)
