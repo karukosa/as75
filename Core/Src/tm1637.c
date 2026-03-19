@@ -166,6 +166,18 @@ void tm1637SetBrightness(TM1637Handle *handle, char brightness)
     tm1637Stop(handle);
 }
 
+void tm1637Clear(TM1637Handle *handle)
+{
+    static const uint8_t blankSegments[4] = {0, 0, 0, 0};
+
+    if (handle == NULL) {
+        return;
+    }
+
+    tm1637WriteSegments(handle, blankSegments);
+}
+
+
 static void tm1637Start(TM1637Handle *handle)
 {
     tm1637ClkHigh(handle);

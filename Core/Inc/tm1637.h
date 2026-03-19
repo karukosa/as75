@@ -27,5 +27,6 @@ void tm1637DisplayDecimal(TM1637Handle *handle, int v, int displaySeparator);
 void tm1637DisplayDecimalTenths(TM1637Handle *handle, int valueTenths);
 void tm1637DisplayTime(TM1637Handle *handle, int hours, int minutes, int showColon);
 void tm1637SetBrightness(TM1637Handle *handle, char brightness);
+void tm1637Clear(TM1637Handle *handle);
 
 #endif /* INC_TM1637_H_ */
