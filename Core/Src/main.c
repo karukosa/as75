@@ -22,16 +22,42 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "button_input.h"
+#include "tm1637.h"
 
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+typedef struct {
+  uint16_t steamTempTenths;
+  uint8_t sterilizeMinutes;
+  uint8_t dryMinutes;
+} ProgramConfig;
+
+typedef enum {
+  APP_MODE_IDLE = 0,
+  APP_MODE_READY,
+  APP_MODE_RUN_PROGRAM,
+  APP_MODE_USER_EDIT
+} AppMode;
+
+typedef enum {
+  USER_FIELD_TEMP = 0,
+  USER_FIELD_STERILIZE,
+  USER_FIELD_DRY
+} UserField;
 
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define BUTTON_DEBOUNCE_MS 40U
+#define BUTTON_LONG_PRESS_MS 650U
+#define BUTTON_REPEAT_MS 120U
+#define BLINK_PERIOD_MS 350U
+#define DISPLAY_SWAP_MS 1200U
+#define BUZZER_SHORT_MS 300U
 
 /* USER CODE END PD */
 
@@ -44,6 +70,33 @@
 SPI_HandleTypeDef hspi1;
 
 /* USER CODE BEGIN PV */
+static TM1637Handle display1;
+static TM1637Handle display2;
+static ButtonInput programButtons[6];
+static ButtonInput buttonUser;
+static ButtonInput buttonStart;
+static ButtonInput buttonSet;
+static ButtonInput buttonUp;
+static ButtonInput buttonDown;
+
+static const ProgramConfig programPresets[6] = {
+    {1210U, 25U, 15U}, {1250U, 30U, 20U}, {1280U, 35U, 20U},
+    {1320U, 40U, 25U}, {1340U, 45U, 25U}, {1360U, 50U, 30U}};
+
+static ProgramConfig userConfig = {1210U, 25U, 15U};
+static ProgramConfig activeConfig = {1210U, 25U, 15U};
+static AppMode appMode = APP_MODE_IDLE;
+static UserField selectedUserField = USER_FIELD_TEMP;
+static uint8_t activeProgramIndex = 0xFFU;
+static uint32_t lastDisplaySwapTick = 0U;
+static uint32_t programStartTick = 0U;
+static uint32_t programDurationMs = 0U;
+
+static uint8_t buzzerActive = 0U;
+static uint8_t buzzerPhaseIsOn = 0U;
+static uint8_t buzzerPhasesRemaining = 0U;
+static uint32_t buzzerPhaseDurationMs = 0U;
+static uint32_t buzzerPhaseTick = 0U;
 
 /* USER CODE END PV */
 
@@ -54,6 +107,22 @@ static void MX_SPI1_Init(void);
 void MX_USB_HOST_Process(void);
 
 /* USER CODE BEGIN PFP */
+static void App_InitUi(void);
+static void App_UpdateButtons(void);
+static void App_HandleInput(uint32_t now);
+static void App_UpdateDisplay(uint32_t now);
+static void App_UpdateLeds(uint32_t now);
+static void App_StartProgram(uint8_t index, const ProgramConfig *cfg);
+static void App_BeginRun(void);
+static void App_AdjustUserField(int16_t delta);
+static uint8_t App_BlinkState(uint32_t now);
+static void App_DisplayStValue(uint8_t minutes);
+static void App_DisplayDrValue(uint8_t minutes);
+static uint8_t App_EncodeSegmentChar(char c);
+static void App_RequestShortBeep(void);
+static void App_RequestPatternBeep(uint8_t blinks, uint32_t phaseMs);
+static void App_UpdateBuzzer(uint32_t now);
+static void App_UpdateRunState(uint32_t now);
 
 /* USER CODE END PFP */
 
@@ -93,6 +162,7 @@ int main(void)
   MX_SPI1_Init();
   MX_USB_HOST_Init();
   /* USER CODE BEGIN 2 */
+  App_InitUi();
 
   /* USER CODE END 2 */
 
@@ -104,6 +174,12 @@ int main(void)
     MX_USB_HOST_Process();
 
     /* USER CODE BEGIN 3 */
+    App_UpdateButtons();
+    App_HandleInput(HAL_GetTick());
+    App_UpdateRunState(HAL_GetTick());
+    App_UpdateDisplay(HAL_GetTick());
+    App_UpdateLeds(HAL_GetTick());
+    App_UpdateBuzzer(HAL_GetTick());
   }
   /* USER CODE END 3 */
 }
@@ -312,6 +388,335 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+static void App_InitUi(void)
+{
+  tm1637Init(&display1, TM1637_DISPLAY_1);
+  tm1637Init(&display2, TM1637_DISPLAY_2);
+  tm1637SetBrightness(&display1, 8);
+  tm1637SetBrightness(&display2, 8);
+
+  ButtonInput_Init(&programButtons[0], B_P1_GPIO_Port, B_P1_Pin, GPIO_PIN_SET);
+  ButtonInput_Init(&programButtons[1], B_P2_GPIO_Port, B_P2_Pin, GPIO_PIN_SET);
+  ButtonInput_Init(&programButtons[2], B_P3_GPIO_Port, B_P3_Pin, GPIO_PIN_SET);
+  ButtonInput_Init(&programButtons[3], B_P4_GPIO_Port, B_P4_Pin, GPIO_PIN_SET);
+  ButtonInput_Init(&programButtons[4], B_P5_GPIO_Port, B_P5_Pin, GPIO_PIN_SET);
+  ButtonInput_Init(&programButtons[5], B_P6_GPIO_Port, B_P6_Pin, GPIO_PIN_SET);
+  ButtonInput_Init(&buttonUser, B_User_GPIO_Port, B_User_Pin, GPIO_PIN_SET);
+  ButtonInput_Init(&buttonStart, B_Start_GPIO_Port, B_Start_Pin, GPIO_PIN_SET);
+  ButtonInput_Init(&buttonSet, B_Set_GPIO_Port, B_Set_Pin, GPIO_PIN_SET);
+  ButtonInput_Init(&buttonUp, B_Up_GPIO_Port, B_Up_Pin, GPIO_PIN_SET);
+  ButtonInput_Init(&buttonDown, B_Down_GPIO_Port, B_Down_Pin, GPIO_PIN_SET);
+
+  activeConfig = programPresets[0];
+  App_UpdateDisplay(HAL_GetTick());
+}
+
+static void App_UpdateButtons(void)
+{
+  uint32_t now = HAL_GetTick();
+
+  for (uint8_t i = 0U; i < 6U; ++i) {
+    ButtonInput_Update(&programButtons[i], now, BUTTON_DEBOUNCE_MS, BUTTON_LONG_PRESS_MS, BUTTON_REPEAT_MS);
+  }
+
+  ButtonInput_Update(&buttonUser, now, BUTTON_DEBOUNCE_MS, BUTTON_LONG_PRESS_MS, BUTTON_REPEAT_MS);
+  ButtonInput_Update(&buttonStart, now, BUTTON_DEBOUNCE_MS, BUTTON_LONG_PRESS_MS, BUTTON_REPEAT_MS);
+  ButtonInput_Update(&buttonSet, now, BUTTON_DEBOUNCE_MS, BUTTON_LONG_PRESS_MS, BUTTON_REPEAT_MS);
+  ButtonInput_Update(&buttonUp, now, BUTTON_DEBOUNCE_MS, BUTTON_LONG_PRESS_MS, BUTTON_REPEAT_MS);
+  ButtonInput_Update(&buttonDown, now, BUTTON_DEBOUNCE_MS, BUTTON_LONG_PRESS_MS, BUTTON_REPEAT_MS);
+}
+
+static void App_HandleInput(uint32_t now)
+{
+  for (uint8_t i = 0U; i < 6U; ++i) {
+    if (ButtonInput_ConsumePressed(&programButtons[i]) != 0U) {
+      App_StartProgram(i, &programPresets[i]);
+      App_RequestShortBeep();
+    }
+  }
+
+  if (ButtonInput_ConsumePressed(&buttonUser) != 0U) {
+    appMode = APP_MODE_USER_EDIT;
+    selectedUserField = USER_FIELD_TEMP;
+    activeProgramIndex = 0xFFU;
+    activeConfig = userConfig;
+    lastDisplaySwapTick = now;
+    App_RequestShortBeep();
+  }
+
+  if (ButtonInput_ConsumePressed(&buttonStart) != 0U) {
+    if (appMode == APP_MODE_READY || appMode == APP_MODE_USER_EDIT) {
+      if (appMode == APP_MODE_USER_EDIT) {
+        userConfig = activeConfig;
+      }
+      App_BeginRun();
+      App_RequestPatternBeep(2U, 500U);
+    }
+    else {
+      App_RequestShortBeep();
+    }
+  }
+
+  if (appMode == APP_MODE_USER_EDIT) {
+    if (ButtonInput_ConsumePressed(&buttonSet) != 0U) {
+      selectedUserField = (UserField)(((uint8_t)selectedUserField + 1U) % 3U);
+      App_RequestShortBeep();
+    }
+
+    if (ButtonInput_ConsumePressed(&buttonUp) != 0U) {
+      App_AdjustUserField(1);
+      App_RequestShortBeep();
+    }
+    if (ButtonInput_ConsumeRepeat(&buttonUp) != 0U) {
+      App_AdjustUserField(10);
+    }
+
+    if (ButtonInput_ConsumePressed(&buttonDown) != 0U) {
+      App_AdjustUserField(-1);
+      App_RequestShortBeep();
+    }
+    if (ButtonInput_ConsumeRepeat(&buttonDown) != 0U) {
+      App_AdjustUserField(-10);
+    }
+
+    userConfig = activeConfig;
+  }
+}
+
+static void App_UpdateDisplay(uint32_t now)
+{
+  uint8_t blinkState = App_BlinkState(now);
+  uint8_t showSterilize;
+
+  tm1637DisplayDecimalTenths(&display2, activeConfig.steamTempTenths);
+
+  if (appMode == APP_MODE_USER_EDIT) {
+    if (selectedUserField == USER_FIELD_STERILIZE) {
+      if (blinkState != 0U) {
+        App_DisplayStValue(activeConfig.sterilizeMinutes);
+      }
+      else {
+        tm1637Clear(&display1);
+      }
+    }
+    else if (selectedUserField == USER_FIELD_DRY) {
+      if (blinkState != 0U) {
+        App_DisplayDrValue(activeConfig.dryMinutes);
+      }
+      else {
+        tm1637Clear(&display1);
+      }
+    }
+    else {
+      App_DisplayStValue(activeConfig.sterilizeMinutes);
+    }
+
+    if (selectedUserField == USER_FIELD_TEMP && blinkState == 0U) {
+      tm1637Clear(&display2);
+    }
+    return;
+  }
+
+  showSterilize = (((now - lastDisplaySwapTick) / DISPLAY_SWAP_MS) % 2U) == 0U;
+  if (showSterilize != 0U) {
+    App_DisplayStValue(activeConfig.sterilizeMinutes);
+  }
+  else {
+    App_DisplayDrValue(activeConfig.dryMinutes);
+  }
+}
+
+static void App_UpdateLeds(uint32_t now)
+{
+  GPIO_TypeDef *programPorts[6] = {LD_P1_GPIO_Port, LD_P2_GPIO_Port, LD_P3_GPIO_Port,
+                                   LD_P4_GPIO_Port, LD_P5_GPIO_Port, LD_P6_GPIO_Port};
+  uint16_t programPins[6] = {LD_P1_Pin, LD_P2_Pin, LD_P3_Pin, LD_P4_Pin, LD_P5_Pin, LD_P6_Pin};
+  GPIO_PinState blink = App_BlinkState(now) ? GPIO_PIN_SET : GPIO_PIN_RESET;
+  GPIO_PinState isUserEdit = (appMode == APP_MODE_USER_EDIT) ? GPIO_PIN_SET : GPIO_PIN_RESET;
+
+  for (uint8_t i = 0U; i < 6U; ++i) {
+    GPIO_PinState state = GPIO_PIN_RESET;
+    if (activeProgramIndex == i) {
+      state = (appMode == APP_MODE_USER_EDIT) ? blink : GPIO_PIN_SET;
+    }
+    HAL_GPIO_WritePin(programPorts[i], programPins[i], state);
+  }
+
+  HAL_GPIO_WritePin(LD_User_GPIO_Port, LD_User_Pin, (appMode == APP_MODE_USER_EDIT) ? blink : GPIO_PIN_RESET);
+
+  HAL_GPIO_WritePin(LD_C1_GPIO_Port, LD_C1_Pin,
+                    (selectedUserField == USER_FIELD_TEMP && appMode == APP_MODE_USER_EDIT) ? blink : GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(LD_C2_GPIO_Port, LD_C2_Pin,
+                    (selectedUserField == USER_FIELD_STERILIZE && appMode == APP_MODE_USER_EDIT) ? blink : GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(LD_C3_GPIO_Port, LD_C3_Pin,
+                    (selectedUserField == USER_FIELD_DRY && appMode == APP_MODE_USER_EDIT) ? blink : GPIO_PIN_RESET);
+
+  HAL_GPIO_WritePin(LD_Start_GPIO_Port, LD_Start_Pin, (appMode == APP_MODE_RUN_PROGRAM) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  if (isUserEdit == GPIO_PIN_SET) {
+    HAL_GPIO_WritePin(LD_Start_GPIO_Port, LD_Start_Pin, blink);
+  }
+}
+
+static void App_StartProgram(uint8_t index, const ProgramConfig *cfg)
+{
+  if (cfg == NULL || index >= 6U) {
+    return;
+  }
+
+  activeProgramIndex = index;
+  activeConfig = *cfg;
+  appMode = APP_MODE_READY;
+  lastDisplaySwapTick = HAL_GetTick();
+}
+
+static void App_BeginRun(void)
+{
+  programStartTick = HAL_GetTick();
+  programDurationMs = ((uint32_t)activeConfig.sterilizeMinutes + (uint32_t)activeConfig.dryMinutes) * 60000U;
+  appMode = APP_MODE_RUN_PROGRAM;
+  lastDisplaySwapTick = programStartTick;
+}
+
+static void App_AdjustUserField(int16_t delta)
+{
+  int32_t nextValue;
+
+  if (selectedUserField == USER_FIELD_TEMP) {
+    nextValue = (int32_t)activeConfig.steamTempTenths + delta;
+    if (nextValue < 1050) {
+      nextValue = 1050;
+    }
+    if (nextValue > 1450) {
+      nextValue = 1450;
+    }
+    activeConfig.steamTempTenths = (uint16_t)nextValue;
+  }
+  else if (selectedUserField == USER_FIELD_STERILIZE) {
+    nextValue = (int32_t)activeConfig.sterilizeMinutes + delta;
+    if (nextValue < 0) {
+      nextValue = 0;
+    }
+    if (nextValue > 99) {
+      nextValue = 99;
+    }
+    activeConfig.sterilizeMinutes = (uint8_t)nextValue;
+  }
+  else {
+    nextValue = (int32_t)activeConfig.dryMinutes + delta;
+    if (nextValue < 0) {
+      nextValue = 0;
+    }
+    if (nextValue > 99) {
+      nextValue = 99;
+    }
+    activeConfig.dryMinutes = (uint8_t)nextValue;
+  }
+}
+
+static uint8_t App_BlinkState(uint32_t now)
+{
+  return (((now / BLINK_PERIOD_MS) % 2U) == 0U) ? 1U : 0U;
+}
+
+static void App_DisplayStValue(uint8_t minutes)
+{
+  uint8_t segments[4] = {0};
+  segments[0] = App_EncodeSegmentChar('S');
+  segments[1] = App_EncodeSegmentChar('t');
+  segments[2] = App_EncodeSegmentChar((char)('0' + ((minutes / 10U) % 10U)));
+  segments[3] = App_EncodeSegmentChar((char)('0' + (minutes % 10U)));
+  tm1637DisplaySegments(&display1, segments);
+}
+
+static void App_DisplayDrValue(uint8_t minutes)
+{
+  uint8_t segments[4] = {0};
+  segments[0] = App_EncodeSegmentChar('D');
+  segments[1] = App_EncodeSegmentChar('r');
+  segments[2] = App_EncodeSegmentChar((char)('0' + ((minutes / 10U) % 10U)));
+  segments[3] = App_EncodeSegmentChar((char)('0' + (minutes % 10U)));
+  tm1637DisplaySegments(&display1, segments);
+}
+
+static uint8_t App_EncodeSegmentChar(char c)
+{
+  switch (c) {
+    case '0': return 0x3f;
+    case '1': return 0x06;
+    case '2': return 0x5b;
+    case '3': return 0x4f;
+    case '4': return 0x66;
+    case '5': return 0x6d;
+    case '6': return 0x7d;
+    case '7': return 0x07;
+    case '8': return 0x7f;
+    case '9': return 0x6f;
+    case 'S': return 0x6d;
+    case 't': return 0x78;
+    case 'D': return 0x5e;
+    case 'r': return 0x50;
+    default: return 0x00;
+  }
+}
+
+static void App_RequestShortBeep(void)
+{
+  App_RequestPatternBeep(1U, BUZZER_SHORT_MS);
+}
+
+static void App_RequestPatternBeep(uint8_t blinks, uint32_t phaseMs)
+{
+  if (blinks == 0U || phaseMs == 0U) {
+    HAL_GPIO_WritePin(Buzzer_GPIO_Port, Buzzer_Pin, GPIO_PIN_RESET);
+    buzzerActive = 0U;
+    return;
+  }
+
+  buzzerActive = 1U;
+  buzzerPhaseIsOn = 1U;
+  buzzerPhasesRemaining = (uint8_t)(blinks * 2U);
+  buzzerPhaseDurationMs = phaseMs;
+  buzzerPhaseTick = HAL_GetTick();
+  HAL_GPIO_WritePin(Buzzer_GPIO_Port, Buzzer_Pin, GPIO_PIN_SET);
+}
+
+static void App_UpdateBuzzer(uint32_t now)
+{
+  if (buzzerActive == 0U) {
+    HAL_GPIO_WritePin(Buzzer_GPIO_Port, Buzzer_Pin, GPIO_PIN_RESET);
+    return;
+  }
+
+  if ((now - buzzerPhaseTick) < buzzerPhaseDurationMs) {
+    return;
+  }
+
+  buzzerPhaseTick = now;
+  if (buzzerPhasesRemaining > 0U) {
+    --buzzerPhasesRemaining;
+  }
+
+  if (buzzerPhasesRemaining == 0U) {
+    buzzerActive = 0U;
+    HAL_GPIO_WritePin(Buzzer_GPIO_Port, Buzzer_Pin, GPIO_PIN_RESET);
+    return;
+  }
+
+  buzzerPhaseIsOn = (uint8_t)(1U - buzzerPhaseIsOn);
+  HAL_GPIO_WritePin(Buzzer_GPIO_Port, Buzzer_Pin, (buzzerPhaseIsOn != 0U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+}
+
+static void App_UpdateRunState(uint32_t now)
+{
+  if (appMode != APP_MODE_RUN_PROGRAM) {
+    return;
+  }
+
+  if (programDurationMs == 0U || (now - programStartTick) >= programDurationMs) {
+    appMode = APP_MODE_READY;
+    App_RequestPatternBeep(3U, 1000U);
+  }
+}
 
 /* USER CODE END 4 */
 

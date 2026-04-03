@@ -140,6 +140,15 @@ void tm1637DisplayTime(TM1637Handle *handle, int hours, int minutes, int showCol
     tm1637WriteSegments(handle, segments);
 }
 
+void tm1637DisplaySegments(TM1637Handle *handle, const uint8_t segments[4])
+{
+    if (handle == NULL || segments == NULL) {
+        return;
+    }
+
+    tm1637WriteSegments(handle, segments);
+}
+
 // Valid brightness values: 0 - 8.
 // 0 = display off.
 void tm1637SetBrightness(TM1637Handle *handle, char brightness)
