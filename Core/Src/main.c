@@ -332,10 +332,10 @@ static void MX_GPIO_Init(void)
 
   /*Configure GPIO pins : B_P1_Pin B_P2_Pin B_P3_Pin B_P4_Pin
                            B_P5_Pin B_P6_Pin B_Start_Pin B_Set_Pin
-                           B_Up_Pin B_Down_Pin B_User_Pin */
+                           B_Up_Pin B_Down_Pin B_User_Pin Water_Sennor_Pin */
   GPIO_InitStruct.Pin = B_P1_Pin|B_P2_Pin|B_P3_Pin|B_P4_Pin
                           |B_P5_Pin|B_P6_Pin|B_Start_Pin|B_Set_Pin
-                          |B_Up_Pin|B_Down_Pin|B_User_Pin;
+                          |B_Up_Pin|B_Down_Pin|B_User_Pin|Water_Sennor_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);

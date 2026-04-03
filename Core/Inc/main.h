@@ -157,6 +157,8 @@ void Error_Handler(void);
 #define SWCLK_GPIO_Port GPIOA
 #define B_User_Pin GPIO_PIN_10
 #define B_User_GPIO_Port GPIOC
+#define Water_Sennor_Pin GPIO_PIN_11
+#define Water_Sennor_GPIO_Port GPIOC
 #define I2S3_SD_Pin GPIO_PIN_12
 #define I2S3_SD_GPIO_Port GPIOC
 #define LD_P1_Pin GPIO_PIN_0
