@@ -60,6 +60,7 @@ typedef enum {
 #define DISPLAY_SWAP_MS 1200U
 #define BUZZER_SHORT_MS 300U
 #define PT100_SAMPLE_MS 500U
+#define WATER_REFILL_TIMEOUT_MS 30000U
 
 /* USER CODE END PD */
 
@@ -134,6 +135,9 @@ static void App_UpdateRunState(uint32_t now);
 static void App_InitPt100(void);
 static void App_UpdatePt100(uint32_t now);
 static void App_DisplayError(void);
+static uint8_t App_PreStartChecks(void);
+static uint8_t App_CheckAndRefillWater(void);
+static uint8_t App_CheckDoorClosed(void);
 
 /* USER CODE END PFP */
 
@@ -407,6 +411,11 @@ static void App_InitUi(void)
   tm1637SetBrightness(&display1, 8);
   tm1637SetBrightness(&display2, 8);
 
+  /* Only LD_LW/LD_HW are active-low, keep all status LEDs OFF at idle */
+  HAL_GPIO_WritePin(LD_Alarm_GPIO_Port, LD_Alarm_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(LD_LW_GPIO_Port, LD_LW_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(LD_HW_GPIO_Port, LD_HW_Pin, GPIO_PIN_SET);
+
   ButtonInput_Init(&programButtons[0], B_P1_GPIO_Port, B_P1_Pin, GPIO_PIN_SET);
   ButtonInput_Init(&programButtons[1], B_P2_GPIO_Port, B_P2_Pin, GPIO_PIN_SET);
   ButtonInput_Init(&programButtons[2], B_P3_GPIO_Port, B_P3_Pin, GPIO_PIN_SET);
@@ -460,16 +469,19 @@ static void App_HandleInput(uint32_t now)
 
   if (ButtonInput_ConsumePressed(&buttonStart) != 0U) {
     if (appMode == APP_MODE_READY || appMode == APP_MODE_USER_EDIT) {
+      HAL_GPIO_WritePin(LD_Alarm_GPIO_Port, LD_Alarm_Pin, GPIO_PIN_SET);
       if (appMode == APP_MODE_USER_EDIT) {
         userConfig = activeConfig;
       }
-      App_BeginRun();
-      App_RequestPatternBeep(2U, 500U);
+      if (App_PreStartChecks() != 0U) {
+        App_BeginRun();
+        App_RequestPatternBeep(2U, 500U);
+      }
     }
     else {
       App_RequestShortBeep();
+      }
     }
-  }
 
   if (appMode == APP_MODE_USER_EDIT) {
     if (ButtonInput_ConsumePressed(&buttonSet) != 0U) {
@@ -728,6 +740,57 @@ static void App_DisplayError(void)
   segments[2] = App_EncodeSegmentChar('r');
   segments[3] = App_EncodeSegmentChar(' ');
   tm1637DisplaySegments(&display2, segments);
+}
+
+static uint8_t App_PreStartChecks(void)
+{
+  if (App_CheckAndRefillWater() == 0U) {
+    return 0U;
+  }
+
+  if (App_CheckDoorClosed() == 0U) {
+    return 0U;
+  }
+
+  return 1U;
+}
+
+static uint8_t App_CheckAndRefillWater(void)
+{
+  uint32_t startTick = HAL_GetTick();
+
+  if (HAL_GPIO_ReadPin(Water_Sennor_GPIO_Port, Water_Sennor_Pin) == GPIO_PIN_SET) {
+    HAL_GPIO_WritePin(Relay_Valve_1_GPIO_Port, Relay_Valve_1_Pin, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(LD_LW_GPIO_Port, LD_LW_Pin, GPIO_PIN_RESET);
+
+    while ((HAL_GetTick() - startTick) < WATER_REFILL_TIMEOUT_MS) {
+      if (HAL_GPIO_ReadPin(Water_Sennor_GPIO_Port, Water_Sennor_Pin) == GPIO_PIN_RESET) {
+        break;
+      }
+    }
+
+    HAL_GPIO_WritePin(Relay_Valve_1_GPIO_Port, Relay_Valve_1_Pin, GPIO_PIN_RESET);
+    if (HAL_GPIO_ReadPin(Water_Sennor_GPIO_Port, Water_Sennor_Pin) == GPIO_PIN_SET) {
+      HAL_GPIO_WritePin(LD_Alarm_GPIO_Port, LD_Alarm_Pin, GPIO_PIN_RESET);
+      App_RequestPatternBeep(3U, 500U);
+      return 0U;
+    }
+  }
+
+  HAL_GPIO_WritePin(LD_HW_GPIO_Port, LD_HW_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(LD_LW_GPIO_Port, LD_LW_Pin, GPIO_PIN_SET);
+  return 1U;
+}
+
+static uint8_t App_CheckDoorClosed(void)
+{
+  if (HAL_GPIO_ReadPin(L_Switch_GPIO_Port, L_Switch_Pin) == GPIO_PIN_SET) {
+    return 1U;
+  }
+
+  HAL_GPIO_WritePin(LD_Alarm_GPIO_Port, LD_Alarm_Pin, GPIO_PIN_RESET);
+  App_RequestPatternBeep(3U, 500U);
+  return 0U;
 }
 
 static void App_RequestShortBeep(void)
