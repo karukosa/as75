@@ -23,6 +23,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "button_input.h"
+#include "max31865.h"
 #include "tm1637.h"
 
 /* USER CODE END Includes */
@@ -58,6 +59,7 @@ typedef enum {
 #define BLINK_PERIOD_MS 350U
 #define DISPLAY_SWAP_MS 1200U
 #define BUZZER_SHORT_MS 300U
+#define PT100_SAMPLE_MS 500U
 
 /* USER CODE END PD */
 
@@ -72,6 +74,7 @@ SPI_HandleTypeDef hspi1;
 /* USER CODE BEGIN PV */
 static TM1637Handle display1;
 static TM1637Handle display2;
+static Max31865Handle pt100Sensor;
 static ButtonInput programButtons[6];
 static ButtonInput buttonUser;
 static ButtonInput buttonStart;
@@ -91,6 +94,11 @@ static uint8_t activeProgramIndex = 0xFFU;
 static uint32_t lastDisplaySwapTick = 0U;
 static uint32_t programStartTick = 0U;
 static uint32_t programDurationMs = 0U;
+
+static int16_t pt100TempTenths = 0;
+static uint8_t pt100TemperatureValid = 0U;
+static uint8_t pt100FaultCode = 0U;
+static uint32_t lastPt100SampleTick = 0U;
 
 static uint8_t buzzerActive = 0U;
 static uint8_t buzzerPhaseIsOn = 0U;
@@ -123,6 +131,9 @@ static void App_RequestShortBeep(void);
 static void App_RequestPatternBeep(uint8_t blinks, uint32_t phaseMs);
 static void App_UpdateBuzzer(uint32_t now);
 static void App_UpdateRunState(uint32_t now);
+static void App_InitPt100(void);
+static void App_UpdatePt100(uint32_t now);
+static void App_DisplayError(void);
 
 /* USER CODE END PFP */
 
@@ -176,6 +187,7 @@ int main(void)
     /* USER CODE BEGIN 3 */
     App_UpdateButtons();
     App_HandleInput(HAL_GetTick());
+    App_UpdatePt100(HAL_GetTick());
     App_UpdateRunState(HAL_GetTick());
     App_UpdateDisplay(HAL_GetTick());
     App_UpdateLeds(HAL_GetTick());
@@ -408,6 +420,8 @@ static void App_InitUi(void)
   ButtonInput_Init(&buttonDown, B_Down_GPIO_Port, B_Down_Pin, GPIO_PIN_SET);
 
   activeConfig = programPresets[0];
+  App_InitPt100();
+  App_UpdatePt100(HAL_GetTick());
   App_UpdateDisplay(HAL_GetTick());
 }
 
@@ -488,7 +502,12 @@ static void App_UpdateDisplay(uint32_t now)
   uint8_t blinkState = App_BlinkState(now);
   uint8_t showSterilize;
 
-  tm1637DisplayDecimalTenths(&display2, activeConfig.steamTempTenths);
+  if (pt100TemperatureValid != 0U) {
+    tm1637DisplayDecimalTenths(&display2, pt100TempTenths);
+  }
+  else {
+    App_DisplayError();
+  }
 
   if (appMode == APP_MODE_USER_EDIT) {
     if (selectedUserField == USER_FIELD_STERILIZE) {
@@ -511,9 +530,6 @@ static void App_UpdateDisplay(uint32_t now)
       App_DisplayStValue(activeConfig.sterilizeMinutes);
     }
 
-    if (selectedUserField == USER_FIELD_TEMP && blinkState == 0U) {
-      tm1637Clear(&display2);
-    }
     return;
   }
 
@@ -654,9 +670,64 @@ static uint8_t App_EncodeSegmentChar(char c)
     case 'S': return 0x6d;
     case 't': return 0x78;
     case 'D': return 0x5e;
+    case 'E': return 0x79;
     case 'r': return 0x50;
     default: return 0x00;
   }
+}
+
+static void App_InitPt100(void)
+{
+  Max31865_Init(&pt100Sensor, &hspi1, CS_GPIO_Port, CS_Pin, 430.0f, 100.0f);
+  if (Max31865_Begin(&pt100Sensor, MAX31865_3WIRE, 1U) == 0U) {
+    pt100TemperatureValid = 0U;
+    pt100FaultCode = 0xFFU;
+    return;
+  }
+
+  lastPt100SampleTick = HAL_GetTick() - PT100_SAMPLE_MS;
+  pt100TemperatureValid = 0U;
+  pt100FaultCode = 0U;
+}
+
+static void App_UpdatePt100(uint32_t now)
+{
+  int16_t measuredTempTenths;
+
+  if ((now - lastPt100SampleTick) < PT100_SAMPLE_MS) {
+    return;
+  }
+
+  lastPt100SampleTick = now;
+  if (Max31865_ReadTemperatureTenthsC(&pt100Sensor, &measuredTempTenths) == 0U) {
+    pt100TemperatureValid = 0U;
+    pt100FaultCode = 0xFFU;
+    return;
+  }
+
+  pt100FaultCode = Max31865_ReadFault(&pt100Sensor, MAX31865_FAULT_NONE);
+  if (pt100FaultCode != 0U) {
+    pt100TemperatureValid = 0U;
+    return;
+  }
+
+  if (measuredTempTenths < 0) {
+    measuredTempTenths = 0;
+  }
+
+  pt100TempTenths = measuredTempTenths;
+  pt100TemperatureValid = 1U;
+}
+
+static void App_DisplayError(void)
+{
+  uint8_t segments[4] = {0};
+
+  segments[0] = App_EncodeSegmentChar('E');
+  segments[1] = App_EncodeSegmentChar('r');
+  segments[2] = App_EncodeSegmentChar('r');
+  segments[3] = App_EncodeSegmentChar(' ');
+  tm1637DisplaySegments(&display2, segments);
 }
 
 static void App_RequestShortBeep(void)
