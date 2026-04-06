@@ -24,6 +24,7 @@
 /* USER CODE BEGIN Includes */
 #include "button_input.h"
 #include "max31865.h"
+#include "pid.h"
 #include "tm1637.h"
 
 /* USER CODE END Includes */
@@ -74,6 +75,12 @@ typedef enum {
 #define RUN_STAGE_VENT_MS 60000U
 #define RUN_COMPLETE_BLINK_MS 3000U
 #define RUN_STAGE_VACUUM_SUB_STEPS 5U
+#define HEATER_PID_WINDOW_MS 2000U
+#define HEATER_PID_SAMPLE_MS 500U
+#define HEATER_PID_OUTPUT_MAX_PERCENT 100.0
+#define HEATER_PID_KP 18.0
+#define HEATER_PID_KI 0.35
+#define HEATER_PID_KD 35.0
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -124,6 +131,13 @@ static uint8_t buzzerPhasesRemaining = 0U;
 static uint32_t buzzerPhaseDurationMs = 0U;
 static uint32_t buzzerPhaseTick = 0U;
 static uint8_t startupWaterReady = 0U;
+static PID_TypeDef heaterPid;
+static double heaterPidInput = 0.0;
+static double heaterPidOutput = 0.0;
+static double heaterPidSetpoint = 0.0;
+static uint32_t heaterPidWindowStartTick = 0U;
+static uint8_t heaterPidReady = 0U;
+static uint32_t heaterPidOnTimeMs = 0U;
 
 /* USER CODE END PV */
 
@@ -161,6 +175,9 @@ static uint8_t App_PreStartChecks(void);
 static uint8_t App_CheckAndRefillWater(void);
 static uint8_t App_CheckDoorClosed(void);
 static void App_HandleStartupChecks(void);
+static void App_InitHeaterPid(void);
+static void App_PrepareHoldPid(uint32_t now);
+static GPIO_PinState App_ComputeHoldHeaterState(uint32_t now);
 
 /* USER CODE END PFP */
 
@@ -928,6 +945,67 @@ static void App_RequestPatternBeep(uint8_t blinks, uint32_t phaseMs)
   HAL_GPIO_WritePin(Buzzer_GPIO_Port, Buzzer_Pin, GPIO_PIN_SET);
 }
 
+static void App_InitHeaterPid(void)
+{
+  PID2(&heaterPid, &heaterPidInput, &heaterPidOutput, &heaterPidSetpoint,
+       HEATER_PID_KP, HEATER_PID_KI, HEATER_PID_KD, _PID_CD_DIRECT);
+  /* Output PID được chuẩn hóa 0..100 (%) để quy đổi ra thời gian ON trong mỗi cửa sổ. */
+  PID_SetOutputLimits(&heaterPid, 0.0, HEATER_PID_OUTPUT_MAX_PERCENT);
+  PID_SetSampleTime(&heaterPid, (int32_t)HEATER_PID_SAMPLE_MS);
+  PID_SetMode(&heaterPid, _PID_MODE_AUTOMATIC);
+  heaterPidWindowStartTick = HAL_GetTick();
+  heaterPidOnTimeMs = 0U;
+  heaterPidReady = 1U;
+}
+
+static void App_PrepareHoldPid(uint32_t now)
+{
+  if (heaterPidReady == 0U) {
+    App_InitHeaterPid();
+  }
+
+  heaterPidSetpoint = (double)activeConfig.steamTempTenths / 10.0;
+  heaterPidInput = (double)pt100TempTenths / 10.0;
+  heaterPidOutput = 0.0;
+  heaterPidOnTimeMs = 0U;
+  PID_SetMode(&heaterPid, _PID_MODE_MANUAL);
+  PID_SetMode(&heaterPid, _PID_MODE_AUTOMATIC);
+  heaterPidWindowStartTick = now;
+}
+
+static GPIO_PinState App_ComputeHoldHeaterState(uint32_t now)
+{
+  uint32_t windowElapsed;
+
+  if (heaterPidReady == 0U) {
+    App_InitHeaterPid();
+  }
+
+  if (pt100TemperatureValid == 0U) {
+    return GPIO_PIN_RESET;
+  }
+
+  heaterPidSetpoint = (double)activeConfig.steamTempTenths / 10.0;
+  heaterPidInput = (double)pt100TempTenths / 10.0;
+  (void)PID_Compute(&heaterPid);
+  heaterPidOnTimeMs = (uint32_t)((heaterPidOutput * (double)HEATER_PID_WINDOW_MS) / HEATER_PID_OUTPUT_MAX_PERCENT);
+  if (heaterPidOnTimeMs > HEATER_PID_WINDOW_MS) {
+    heaterPidOnTimeMs = HEATER_PID_WINDOW_MS;
+  }
+
+  while ((now - heaterPidWindowStartTick) >= HEATER_PID_WINDOW_MS) {
+    heaterPidWindowStartTick += HEATER_PID_WINDOW_MS;
+  }
+
+  windowElapsed = now - heaterPidWindowStartTick;
+  /* SSR nhận tín hiệu ON/OFF: bật trong khoảng heaterPidOnTimeMs, tắt phần còn lại của cửa sổ. */
+  if (windowElapsed < heaterPidOnTimeMs) {
+    return GPIO_PIN_SET;
+  }
+
+  return GPIO_PIN_RESET;
+}
+
 static void App_UpdateBuzzer(uint32_t now)
 {
   if (buzzerActive == 0U) {
@@ -981,29 +1059,50 @@ static void App_ApplyRunOutputs(uint32_t now)
   GPIO_PinState heaterState = GPIO_PIN_RESET;
 
   if (appMode == APP_MODE_RUN_PROGRAM) {
-    if (runStage == RUN_STAGE_VACUUM) {
-      uint32_t elapsed = now - runStageStartTick;
-      uint32_t stepMs = RUN_STAGE_VACUUM_MS / RUN_STAGE_VACUUM_SUB_STEPS;
-      uint8_t stepIndex = 0U;
-      if (stepMs > 0U) {
-        stepIndex = (uint8_t)(elapsed / stepMs);
-      }
-      if (stepIndex >= RUN_STAGE_VACUUM_SUB_STEPS) {
-        stepIndex = RUN_STAGE_VACUUM_SUB_STEPS - 1U;
+    switch (runStage) {
+      case RUN_STAGE_VACUUM: {
+        uint32_t elapsed = now - runStageStartTick;
+        uint32_t stepMs = RUN_STAGE_VACUUM_MS / RUN_STAGE_VACUUM_SUB_STEPS;
+        uint8_t stepIndex = 0U;
+        if (stepMs > 0U) {
+          stepIndex = (uint8_t)(elapsed / stepMs);
+        }
+        if (stepIndex >= RUN_STAGE_VACUUM_SUB_STEPS) {
+          stepIndex = RUN_STAGE_VACUUM_SUB_STEPS - 1U;
+        }
+
+        if ((stepIndex % 2U) == 0U) {
+          /* 3 lần hút chân không: bật pump + valve 2 */
+          pumpState = GPIO_PIN_SET;
+          valve2State = GPIO_PIN_SET;
+        }
+        else {
+          /* Xen kẽ 2 lần gia nhiệt bằng Heater PE10 */
+          heaterState = GPIO_PIN_SET;
+        }
+        break;
       }
 
-      if ((stepIndex % 2U) == 0U) {
-        /* 3 lần hút chân không: bật pump + valve 2 */
-        pumpState = GPIO_PIN_SET;
-        valve2State = GPIO_PIN_SET;
-      }
-      else {
-        /* Xen kẽ 2 lần gia nhiệt bằng Heater PE10 */
+      case RUN_STAGE_HEAT:
+        /* Gia nhiệt đến đúng nhiệt độ mục tiêu của chương trình P1-P6 hoặc User */
+        if (pt100TemperatureValid == 0U || pt100TempTenths < (int16_t)activeConfig.steamTempTenths) {
+          heaterState = GPIO_PIN_SET;
+        }
+        break;
+
+      case RUN_STAGE_HOLD:
+        /* Giữ nhiệt: đóng/cắt Heater theo PID */
+        heaterState = App_ComputeHoldHeaterState(now);
+        break;
+
+      case RUN_STAGE_DRY:
         heaterState = GPIO_PIN_SET;
-      }
-    }
-    else if (runStage == RUN_STAGE_HEAT || runStage == RUN_STAGE_HOLD || runStage == RUN_STAGE_DRY) {
-      heaterState = GPIO_PIN_SET;
+        break;
+
+      case RUN_STAGE_VENT:
+      case RUN_STAGE_IDLE:
+      default:
+        break;
     }
   }
 
@@ -1064,6 +1163,7 @@ static void App_ActivateRunStage(RunStage stage, uint32_t now)
       break;
     case RUN_STAGE_HOLD:
       runStageDurationMs = programDurationMs;
+      App_PrepareHoldPid(now);
       break;
     case RUN_STAGE_VENT:
       runStageDurationMs = RUN_STAGE_VENT_MS;
