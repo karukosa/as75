@@ -49,6 +49,15 @@ typedef enum {
   USER_FIELD_DRY
 } UserField;
 
+typedef enum {
+  RUN_STAGE_IDLE = 0,
+  RUN_STAGE_VACUUM,
+  RUN_STAGE_HEAT,
+  RUN_STAGE_HOLD,
+  RUN_STAGE_VENT,
+  RUN_STAGE_DRY
+} RunStage;
+
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -61,6 +70,10 @@ typedef enum {
 #define BUZZER_SHORT_MS 300U
 #define PT100_SAMPLE_MS 500U
 #define WATER_REFILL_TIMEOUT_MS 30000U
+#define RUN_STAGE_VACUUM_MS 660000U
+#define RUN_STAGE_VENT_MS 60000U
+#define RUN_COMPLETE_BLINK_MS 3000U
+#define RUN_STAGE_VACUUM_SUB_STEPS 5U
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -94,6 +107,11 @@ static uint8_t activeProgramIndex = 0xFFU;
 static uint32_t lastDisplaySwapTick = 0U;
 static uint32_t programStartTick = 0U;
 static uint32_t programDurationMs = 0U;
+static RunStage runStage = RUN_STAGE_IDLE;
+static uint32_t runStageStartTick = 0U;
+static uint32_t runStageDurationMs = 0U;
+static uint8_t runCompleteLatched = 0U;
+static uint32_t runCompleteTick = 0U;
 
 static int16_t pt100TempTenths = 0;
 static uint8_t pt100TemperatureValid = 0U;
@@ -132,6 +150,10 @@ static void App_RequestShortBeep(void);
 static void App_RequestPatternBeep(uint8_t blinks, uint32_t phaseMs);
 static void App_UpdateBuzzer(uint32_t now);
 static void App_UpdateRunState(uint32_t now);
+static void App_MoveToNextRunStage(uint32_t now);
+static void App_ActivateRunStage(RunStage stage, uint32_t now);
+static uint8_t App_IsRunStageTimedOut(uint32_t now);
+static void App_ApplyRunOutputs(uint32_t now);
 static void App_InitPt100(void);
 static void App_UpdatePt100(uint32_t now);
 static void App_DisplayError(void);
@@ -470,6 +492,7 @@ static void App_HandleInput(uint32_t now)
     selectedUserField = USER_FIELD_TEMP;
     activeProgramIndex = 0xFFU;
     activeConfig = userConfig;
+    runCompleteLatched = 0U;
     lastDisplaySwapTick = now;
     App_RequestShortBeep();
   }
@@ -579,12 +602,76 @@ static void App_UpdateLeds(uint32_t now)
 
   HAL_GPIO_WritePin(LD_User_GPIO_Port, LD_User_Pin, (appMode == APP_MODE_USER_EDIT) ? blink : GPIO_PIN_RESET);
 
-  HAL_GPIO_WritePin(LD_C1_GPIO_Port, LD_C1_Pin,
-                    (selectedUserField == USER_FIELD_TEMP && appMode == APP_MODE_USER_EDIT) ? blink : GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(LD_C2_GPIO_Port, LD_C2_Pin,
-                    (selectedUserField == USER_FIELD_STERILIZE && appMode == APP_MODE_USER_EDIT) ? blink : GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(LD_C3_GPIO_Port, LD_C3_Pin,
-                    (selectedUserField == USER_FIELD_DRY && appMode == APP_MODE_USER_EDIT) ? blink : GPIO_PIN_RESET);
+  if (runCompleteLatched != 0U) {
+    GPIO_PinState completeState = GPIO_PIN_SET;
+    if ((now - runCompleteTick) < RUN_COMPLETE_BLINK_MS) {
+      completeState = blink;
+    }
+
+    HAL_GPIO_WritePin(LD_C1_GPIO_Port, LD_C1_Pin, completeState);
+    HAL_GPIO_WritePin(LD_C2_GPIO_Port, LD_C2_Pin, completeState);
+    HAL_GPIO_WritePin(LD_C3_GPIO_Port, LD_C3_Pin, completeState);
+    HAL_GPIO_WritePin(LD_C4_GPIO_Port, LD_C4_Pin, completeState);
+    HAL_GPIO_WritePin(LD_C5_GPIO_Port, LD_C5_Pin, completeState);
+    HAL_GPIO_WritePin(LD_C6_GPIO_Port, LD_C6_Pin, completeState);
+    HAL_GPIO_WritePin(LD_C7_GPIO_Port, LD_C7_Pin, completeState);
+  }
+  else if (appMode == APP_MODE_RUN_PROGRAM) {
+    GPIO_PinState c1State = GPIO_PIN_RESET;
+    GPIO_PinState c2State = GPIO_PIN_RESET;
+    GPIO_PinState c3State = GPIO_PIN_RESET;
+    GPIO_PinState c4State = GPIO_PIN_RESET;
+    GPIO_PinState c5State = GPIO_PIN_RESET;
+    GPIO_PinState c6State = GPIO_PIN_RESET;
+    GPIO_PinState c7State = GPIO_PIN_RESET;
+
+    if (runStage == RUN_STAGE_VACUUM) {
+      c1State = blink;
+    }
+    else if (runStage == RUN_STAGE_HEAT) {
+      c2State = blink;
+    }
+    else if (runStage == RUN_STAGE_HOLD) {
+      uint8_t holdSegment = 0U;
+      if (runStageDurationMs > 0U) {
+        uint32_t elapsed = now - runStageStartTick;
+        holdSegment = (uint8_t)((elapsed * 3U) / runStageDurationMs);
+        if (holdSegment > 2U) {
+          holdSegment = 2U;
+        }
+      }
+
+      c3State = (holdSegment > 0U) ? GPIO_PIN_SET : blink;
+      c4State = (holdSegment > 1U) ? GPIO_PIN_SET : ((holdSegment == 1U) ? blink : GPIO_PIN_RESET);
+      c5State = (holdSegment == 2U) ? blink : GPIO_PIN_RESET;
+    }
+    else if (runStage == RUN_STAGE_VENT) {
+       c6State = blink;
+    }
+    else if (runStage == RUN_STAGE_DRY) {
+      c7State = blink;
+    }
+
+    HAL_GPIO_WritePin(LD_C1_GPIO_Port, LD_C1_Pin, c1State);
+    HAL_GPIO_WritePin(LD_C2_GPIO_Port, LD_C2_Pin, c2State);
+    HAL_GPIO_WritePin(LD_C3_GPIO_Port, LD_C3_Pin, c3State);
+    HAL_GPIO_WritePin(LD_C4_GPIO_Port, LD_C4_Pin, c4State);
+    HAL_GPIO_WritePin(LD_C5_GPIO_Port, LD_C5_Pin, c5State);
+    HAL_GPIO_WritePin(LD_C6_GPIO_Port, LD_C6_Pin, c6State);
+    HAL_GPIO_WritePin(LD_C7_GPIO_Port, LD_C7_Pin, c7State);
+  }
+  else {
+    HAL_GPIO_WritePin(LD_C1_GPIO_Port, LD_C1_Pin,
+                      (selectedUserField == USER_FIELD_TEMP && appMode == APP_MODE_USER_EDIT) ? blink : GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(LD_C2_GPIO_Port, LD_C2_Pin,
+                      (selectedUserField == USER_FIELD_STERILIZE && appMode == APP_MODE_USER_EDIT) ? blink : GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(LD_C3_GPIO_Port, LD_C3_Pin,
+                      (selectedUserField == USER_FIELD_DRY && appMode == APP_MODE_USER_EDIT) ? blink : GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(LD_C4_GPIO_Port, LD_C4_Pin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(LD_C5_GPIO_Port, LD_C5_Pin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(LD_C6_GPIO_Port, LD_C6_Pin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(LD_C7_GPIO_Port, LD_C7_Pin, GPIO_PIN_RESET);
+  }
 
   HAL_GPIO_WritePin(LD_Start_GPIO_Port, LD_Start_Pin, (appMode == APP_MODE_RUN_PROGRAM) ? GPIO_PIN_SET : GPIO_PIN_RESET);
   if (isUserEdit == GPIO_PIN_SET) {
@@ -602,6 +689,7 @@ static void App_StartProgram(uint8_t index, const ProgramConfig *cfg)
   activeConfig = *cfg;
   appMode = APP_MODE_READY;
   lastDisplaySwapTick = HAL_GetTick();
+  runCompleteLatched = 0U;
 }
 
 static void App_BeginRun(void)
@@ -610,6 +698,8 @@ static void App_BeginRun(void)
   programDurationMs = ((uint32_t)activeConfig.sterilizeMinutes + (uint32_t)activeConfig.dryMinutes) * 60000U;
   appMode = APP_MODE_RUN_PROGRAM;
   lastDisplaySwapTick = programStartTick;
+  runCompleteLatched = 0U;
+  App_ActivateRunStage(RUN_STAGE_VACUUM, programStartTick);
 }
 
 static void App_AdjustUserField(int16_t delta)
@@ -866,13 +956,125 @@ static void App_UpdateBuzzer(uint32_t now)
 
 static void App_UpdateRunState(uint32_t now)
 {
+  App_ApplyRunOutputs(now);
+
   if (appMode != APP_MODE_RUN_PROGRAM) {
     return;
   }
 
-  if (programDurationMs == 0U || (now - programStartTick) >= programDurationMs) {
+  if (App_IsRunStageTimedOut(now) != 0U) {
+    App_MoveToNextRunStage(now);
+  }
+
+  if (runStage == RUN_STAGE_IDLE) {
     appMode = APP_MODE_READY;
+    runCompleteLatched = 1U;
+    runCompleteTick = now;
     App_RequestPatternBeep(3U, 1000U);
+  }
+}
+
+static void App_ApplyRunOutputs(uint32_t now)
+{
+  GPIO_PinState pumpState = GPIO_PIN_RESET;
+  GPIO_PinState valve2State = GPIO_PIN_RESET;
+  GPIO_PinState heaterState = GPIO_PIN_RESET;
+
+  if (appMode == APP_MODE_RUN_PROGRAM) {
+    if (runStage == RUN_STAGE_VACUUM) {
+      uint32_t elapsed = now - runStageStartTick;
+      uint32_t stepMs = RUN_STAGE_VACUUM_MS / RUN_STAGE_VACUUM_SUB_STEPS;
+      uint8_t stepIndex = 0U;
+      if (stepMs > 0U) {
+        stepIndex = (uint8_t)(elapsed / stepMs);
+      }
+      if (stepIndex >= RUN_STAGE_VACUUM_SUB_STEPS) {
+        stepIndex = RUN_STAGE_VACUUM_SUB_STEPS - 1U;
+      }
+
+      if ((stepIndex % 2U) == 0U) {
+        /* 3 lần hút chân không: bật pump + valve 2 */
+        pumpState = GPIO_PIN_SET;
+        valve2State = GPIO_PIN_SET;
+      }
+      else {
+        /* Xen kẽ 2 lần gia nhiệt bằng Heater PE10 */
+        heaterState = GPIO_PIN_SET;
+      }
+    }
+    else if (runStage == RUN_STAGE_HEAT || runStage == RUN_STAGE_HOLD || runStage == RUN_STAGE_DRY) {
+      heaterState = GPIO_PIN_SET;
+    }
+  }
+
+  HAL_GPIO_WritePin(Relay_Pump_GPIO_Port, Relay_Pump_Pin, pumpState);
+  HAL_GPIO_WritePin(Relay_Valve_2_GPIO_Port, Relay_Valve_2_Pin, valve2State);
+  HAL_GPIO_WritePin(SSR_Heater_GPIO_Port, SSR_Heater_Pin, heaterState);
+}
+
+static uint8_t App_IsRunStageTimedOut(uint32_t now)
+{
+  if (runStage == RUN_STAGE_HEAT) {
+    if (pt100TemperatureValid == 0U) {
+      return 0U;
+    }
+    return (pt100TempTenths >= (int16_t)activeConfig.steamTempTenths) ? 1U : 0U;
+  }
+
+  if (runStageDurationMs == 0U) {
+    return 1U;
+  }
+
+  return ((now - runStageStartTick) >= runStageDurationMs) ? 1U : 0U;
+}
+
+static void App_MoveToNextRunStage(uint32_t now)
+{
+  switch (runStage) {
+    case RUN_STAGE_VACUUM:
+      App_ActivateRunStage(RUN_STAGE_HEAT, now);
+      break;
+    case RUN_STAGE_HEAT:
+      App_ActivateRunStage(RUN_STAGE_HOLD, now);
+      break;
+    case RUN_STAGE_HOLD:
+      App_ActivateRunStage(RUN_STAGE_VENT, now);
+      break;
+    case RUN_STAGE_VENT:
+      App_ActivateRunStage(RUN_STAGE_DRY, now);
+      break;
+    case RUN_STAGE_DRY:
+    default:
+      App_ActivateRunStage(RUN_STAGE_IDLE, now);
+      break;
+  }
+}
+
+static void App_ActivateRunStage(RunStage stage, uint32_t now)
+{
+  runStage = stage;
+  runStageStartTick = now;
+
+  switch (stage) {
+    case RUN_STAGE_VACUUM:
+      runStageDurationMs = RUN_STAGE_VACUUM_MS;
+      break;
+    case RUN_STAGE_HEAT:
+      runStageDurationMs = 0U;
+      break;
+    case RUN_STAGE_HOLD:
+      runStageDurationMs = programDurationMs;
+      break;
+    case RUN_STAGE_VENT:
+      runStageDurationMs = RUN_STAGE_VENT_MS;
+      break;
+    case RUN_STAGE_DRY:
+      runStageDurationMs = (uint32_t)activeConfig.dryMinutes * 60000U;
+      break;
+    case RUN_STAGE_IDLE:
+    default:
+      runStageDurationMs = 0U;
+      break;
   }
 }
 
