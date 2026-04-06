@@ -14,6 +14,7 @@
   * If no LICENSE file comes with this software, it is provided AS-IS.
   *
   ******************************************************************************
+  *Made by Karukosa aka Vũ Nam Hưng
   */
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
@@ -84,6 +85,7 @@ typedef enum {
 #define HEATER_PID_KP 18.0
 #define HEATER_PID_KI 0.35
 #define HEATER_PID_KD 35.0
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
