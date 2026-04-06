@@ -72,7 +72,10 @@ typedef enum {
 #define PT100_SAMPLE_MS 500U
 #define WATER_REFILL_TIMEOUT_MS 30000U
 #define RUN_STAGE_VACUUM_MS 660000U
-#define RUN_STAGE_VENT_MS 60000U
+#define RUN_STAGE_VENT_DRAIN_MS 120000U
+#define RUN_STAGE_VENT_RELEASE_MS 120000U
+#define RUN_STAGE_VENT_VACUUM_MS 180000U
+#define RUN_STAGE_VENT_MS (RUN_STAGE_VENT_DRAIN_MS + RUN_STAGE_VENT_RELEASE_MS + RUN_STAGE_VENT_VACUUM_MS)
 #define RUN_COMPLETE_BLINK_MS 3000U
 #define RUN_STAGE_VACUUM_SUB_STEPS 5U
 #define HEATER_PID_WINDOW_MS 2000U
@@ -172,7 +175,7 @@ static void App_InitPt100(void);
 static void App_UpdatePt100(uint32_t now);
 static void App_DisplayError(void);
 static uint8_t App_PreStartChecks(void);
-static uint8_t App_CheckAndRefillWater(void);
+static uint8_t App_CheckWaterReady(void);
 static uint8_t App_CheckDoorClosed(void);
 static void App_HandleStartupChecks(void);
 static void App_InitHeaterPid(void);
@@ -1056,7 +1059,10 @@ static void App_ApplyRunOutputs(uint32_t now)
 {
   GPIO_PinState pumpState = GPIO_PIN_RESET;
   GPIO_PinState valve2State = GPIO_PIN_RESET;
-  GPIO_PinState heaterState = GPIO_PIN_RESET;
+  GPIO_PinState valve3State = GPIO_PIN_RESET;
+  GPIO_PinState valve4State = GPIO_PIN_RESET;
+  GPIO_PinState steamHeaterState = GPIO_PIN_RESET;
+  GPIO_PinState dryHeaterState = GPIO_PIN_RESET;
 
   if (appMode == APP_MODE_RUN_PROGRAM) {
     switch (runStage) {
@@ -1078,7 +1084,7 @@ static void App_ApplyRunOutputs(uint32_t now)
         }
         else {
           /* Xen kẽ 2 lần gia nhiệt bằng Heater PE10 */
-          heaterState = GPIO_PIN_SET;
+          steamHeaterState = GPIO_PIN_SET;
         }
         break;
       }
@@ -1086,29 +1092,64 @@ static void App_ApplyRunOutputs(uint32_t now)
       case RUN_STAGE_HEAT:
         /* Gia nhiệt đến đúng nhiệt độ mục tiêu của chương trình P1-P6 hoặc User */
         if (pt100TemperatureValid == 0U || pt100TempTenths < (int16_t)activeConfig.steamTempTenths) {
-          heaterState = GPIO_PIN_SET;
+          steamHeaterState = GPIO_PIN_SET;
         }
         break;
 
       case RUN_STAGE_HOLD:
         /* Giữ nhiệt: đóng/cắt Heater theo PID */
-        heaterState = App_ComputeHoldHeaterState(now);
+        steamHeaterState = App_ComputeHoldHeaterState(now);
         break;
+
+      case RUN_STAGE_VENT: {
+        uint32_t elapsed = now - runStageStartTick;
+
+        if (elapsed < RUN_STAGE_VENT_DRAIN_MS) {
+          /* 2 phút đầu: mở valve 3 xả nước trong buồng. */
+          valve3State = GPIO_PIN_SET;
+        }
+        else if (elapsed < (RUN_STAGE_VENT_DRAIN_MS + RUN_STAGE_VENT_RELEASE_MS)) {
+          /* 2 phút tiếp theo: mở valve 4 xả khí. */
+          valve4State = GPIO_PIN_SET;
+        }
+        else {
+          /* 3 phút cuối: bật pump + valve 2 để hút chân không. */
+          pumpState = GPIO_PIN_SET;
+          valve2State = GPIO_PIN_SET;
+        }
+        break;
+      }
 
       case RUN_STAGE_DRY:
-        heaterState = GPIO_PIN_SET;
+        /* Giai đoạn sấy: bật pump liên tục và điều khiển PE11 giữ quanh 80°C */
+        pumpState = GPIO_PIN_SET;
+        if (pt100TemperatureValid == 0U || pt100TempTenths < 780) {
+          dryHeaterState = GPIO_PIN_SET;
+        }
+        else if (pt100TempTenths > 820) {
+          dryHeaterState = GPIO_PIN_RESET;
+        }
+        else {
+          dryHeaterState = HAL_GPIO_ReadPin(SSR_HResistor_GPIO_Port, SSR_HResistor_Pin);
+        }
         break;
 
-      case RUN_STAGE_VENT:
       case RUN_STAGE_IDLE:
       default:
         break;
     }
   }
+  else if (runCompleteLatched != 0U) {
+    /* Sau khi hoàn tất, giữ mở valve 4 để cân bằng áp buồng. */
+    valve4State = GPIO_PIN_SET;
+  }
 
   HAL_GPIO_WritePin(Relay_Pump_GPIO_Port, Relay_Pump_Pin, pumpState);
   HAL_GPIO_WritePin(Relay_Valve_2_GPIO_Port, Relay_Valve_2_Pin, valve2State);
-  HAL_GPIO_WritePin(SSR_Heater_GPIO_Port, SSR_Heater_Pin, heaterState);
+  HAL_GPIO_WritePin(Relay_Valve_3_GPIO_Port, Relay_Valve_3_Pin, valve3State);
+  HAL_GPIO_WritePin(Relay_Valve_4_GPIO_Port, Relay_Valve_4_Pin, valve4State);
+  HAL_GPIO_WritePin(SSR_Heater_GPIO_Port, SSR_Heater_Pin, steamHeaterState);
+  HAL_GPIO_WritePin(SSR_HResistor_GPIO_Port, SSR_HResistor_Pin, dryHeaterState);
 }
 
 static uint8_t App_IsRunStageTimedOut(uint32_t now)
