@@ -60,6 +60,14 @@ typedef enum {
   RUN_STAGE_DRY
 } RunStage;
 
+typedef enum {
+  APP_ERROR_NONE = 0,
+  APP_ERROR_PT100 = 1,
+  APP_ERROR_WATER = 2,
+  APP_ERROR_DOOR = 3,
+  APP_ERROR_HEAT_TIMEOUT = 4
+} AppErrorCode;
+
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -86,6 +94,7 @@ typedef enum {
 #define HEATER_PID_KI 0.35
 #define HEATER_PID_KD 35.0
 #define EMERGENCY_STOP_TEMP_TENTHS 1360
+#define HEAT_TIMEOUT_MS 2100000U
 
 /* USER CODE END PD */
 
@@ -143,6 +152,7 @@ static double heaterPidSetpoint = 0.0;
 static uint32_t heaterPidWindowStartTick = 0U;
 static uint8_t heaterPidReady = 0U;
 static uint32_t heaterPidOnTimeMs = 0U;
+static AppErrorCode appErrorCode = APP_ERROR_NONE;
 
 /* USER CODE END PV */
 
@@ -175,7 +185,7 @@ static uint8_t App_IsRunStageTimedOut(uint32_t now);
 static void App_ApplyRunOutputs(uint32_t now);
 static void App_InitPt100(void);
 static void App_UpdatePt100(uint32_t now);
-static void App_DisplayError(void);
+static void App_DisplayError(AppErrorCode code);
 static uint8_t App_PreStartChecks(void);
 static uint8_t App_CheckWaterReady(void);
 static uint8_t App_CheckDoorClosed(void);
@@ -185,6 +195,7 @@ static void App_PrepareHoldPid(uint32_t now);
 static GPIO_PinState App_ComputeHoldHeaterState(uint32_t now);
 static void App_EmergencyStop(uint8_t isOverTemperature);
 static void App_ResetToInitialIdle(void);
+static void App_RaiseError(AppErrorCode code);
 
 /* USER CODE END PFP */
 
@@ -590,11 +601,14 @@ static void App_UpdateDisplay(uint32_t now)
   uint8_t blinkState = App_BlinkState(now);
   uint8_t showSterilize;
 
-  if (pt100TemperatureValid != 0U) {
+  if (appErrorCode != APP_ERROR_NONE) {
+    App_DisplayError(appErrorCode);
+  }
+  else if (pt100TemperatureValid != 0U) {
     tm1637DisplayDecimalTenths(&display2, pt100TempTenths);
   }
   else {
-    App_DisplayError();
+    App_DisplayError(APP_ERROR_PT100);
   }
 
   if (appMode == APP_MODE_USER_EDIT) {
@@ -741,6 +755,7 @@ static void App_StartProgram(uint8_t index, const ProgramConfig *cfg)
 static void App_BeginRun(void)
 {
   programStartTick = HAL_GetTick();
+  appErrorCode = APP_ERROR_NONE;
   appMode = APP_MODE_RUN_PROGRAM;
   lastDisplaySwapTick = programStartTick;
   runCompleteLatched = 0U;
@@ -836,6 +851,7 @@ static void App_InitPt100(void)
   if (Max31865_Begin(&pt100Sensor, MAX31865_3WIRE, 1U) == 0U) {
     pt100TemperatureValid = 0U;
     pt100FaultCode = 0xFFU;
+    App_RaiseError(APP_ERROR_PT100);
     return;
   }
 
@@ -853,17 +869,19 @@ static void App_UpdatePt100(uint32_t now)
   }
 
   lastPt100SampleTick = now;
-  if (Max31865_ReadTemperatureTenthsC(&pt100Sensor, &measuredTempTenths) == 0U) {
-    pt100TemperatureValid = 0U;
-    pt100FaultCode = 0xFFU;
-    return;
-  }
+   if (Max31865_ReadTemperatureTenthsC(&pt100Sensor, &measuredTempTenths) == 0U) {
+     pt100TemperatureValid = 0U;
+     pt100FaultCode = 0xFFU;
+     App_RaiseError(APP_ERROR_PT100);
+     return;
+   }
 
-  pt100FaultCode = Max31865_ReadFault(&pt100Sensor, MAX31865_FAULT_NONE);
-  if (pt100FaultCode != 0U) {
-    pt100TemperatureValid = 0U;
-    return;
-  }
+   pt100FaultCode = Max31865_ReadFault(&pt100Sensor, MAX31865_FAULT_NONE);
+   if (pt100FaultCode != 0U) {
+     pt100TemperatureValid = 0U;
+     App_RaiseError(APP_ERROR_PT100);
+     return;
+   }
 
   if (measuredTempTenths < 0) {
     measuredTempTenths = 0;
@@ -871,16 +889,25 @@ static void App_UpdatePt100(uint32_t now)
 
   pt100TempTenths = measuredTempTenths;
   pt100TemperatureValid = 1U;
-}
+  if (appErrorCode == APP_ERROR_PT100) {
+    appErrorCode = APP_ERROR_NONE;
+    HAL_GPIO_WritePin(LD_Alarm_GPIO_Port, LD_Alarm_Pin, GPIO_PIN_RESET);
+    }
+  }
 
-static void App_DisplayError(void)
+static void App_DisplayError(AppErrorCode code)
 {
   uint8_t segments[4] = {0};
+  uint8_t errorNumber = (uint8_t)code;
+
+  if (errorNumber > 99U) {
+    errorNumber = 99U;
+  }
 
   segments[0] = App_EncodeSegmentChar('E');
   segments[1] = App_EncodeSegmentChar('r');
-  segments[2] = App_EncodeSegmentChar('r');
-  segments[3] = App_EncodeSegmentChar(' ');
+  segments[2] = App_EncodeSegmentChar((char)('0' + ((errorNumber / 10U) % 10U)));
+  segments[3] = App_EncodeSegmentChar((char)('0' + (errorNumber % 10U)));
   tm1637DisplaySegments(&display2, segments);
 }
 
@@ -914,28 +941,35 @@ static uint8_t App_CheckWaterReady(void)
     }
 
     HAL_GPIO_WritePin(Relay_Valve_1_GPIO_Port, Relay_Valve_1_Pin, GPIO_PIN_RESET);
-    if (HAL_GPIO_ReadPin(Water_Sennor_GPIO_Port, Water_Sennor_Pin) == GPIO_PIN_SET) {
-      HAL_GPIO_WritePin(LD_Alarm_GPIO_Port, LD_Alarm_Pin, GPIO_PIN_SET);
-      App_RequestPatternBeep(3U, 500U);
-      return 0U;
+      if (HAL_GPIO_ReadPin(Water_Sennor_GPIO_Port, Water_Sennor_Pin) == GPIO_PIN_SET) {
+        App_RaiseError(APP_ERROR_WATER);
+        return 0U;
+      }
     }
-  }
 
-  HAL_GPIO_WritePin(LD_LW_GPIO_Port, LD_LW_Pin, GPIO_PIN_SET);
-  HAL_GPIO_WritePin(LD_HW_GPIO_Port, LD_HW_Pin, GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(LD_Alarm_GPIO_Port, LD_Alarm_Pin, GPIO_PIN_RESET);
-  return 1U;
-}
+    if (appErrorCode == APP_ERROR_WATER) {
+      appErrorCode = APP_ERROR_NONE;
+    }
+    HAL_GPIO_WritePin(LD_LW_GPIO_Port, LD_LW_Pin, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(LD_HW_GPIO_Port, LD_HW_Pin, GPIO_PIN_RESET);
+    if (appErrorCode == APP_ERROR_NONE) {
+      HAL_GPIO_WritePin(LD_Alarm_GPIO_Port, LD_Alarm_Pin, GPIO_PIN_RESET);
+    }
+    return 1U;
+  }
 
 static uint8_t App_CheckDoorClosed(void)
 {
   /* PB13 (L_Switch): HIGH = cửa đã đóng */
   if (HAL_GPIO_ReadPin(L_Switch_GPIO_Port, L_Switch_Pin) == GPIO_PIN_SET) {
+    if (appErrorCode == APP_ERROR_DOOR) {
+      appErrorCode = APP_ERROR_NONE;
+      HAL_GPIO_WritePin(LD_Alarm_GPIO_Port, LD_Alarm_Pin, GPIO_PIN_RESET);
+    }
     return 1U;
   }
 
-  HAL_GPIO_WritePin(LD_Alarm_GPIO_Port, LD_Alarm_Pin, GPIO_PIN_SET);
-  App_RequestPatternBeep(3U, 500U);
+  App_RaiseError(APP_ERROR_DOOR);
   return 0U;
 }
 
@@ -1070,6 +1104,12 @@ static void App_UpdateRunState(uint32_t now)
 
   if ((pt100TemperatureValid != 0U) && (pt100TempTenths >= EMERGENCY_STOP_TEMP_TENTHS)) {
     App_EmergencyStop(1U);
+    return;
+  }
+
+  if ((runStage == RUN_STAGE_HEAT) && ((now - runStageStartTick) >= HEAT_TIMEOUT_MS)) {
+    App_RaiseError(APP_ERROR_HEAT_TIMEOUT);
+    App_EmergencyStop(0U);
     return;
   }
 
@@ -1272,7 +1312,7 @@ static void App_EmergencyStop(uint8_t isOverTemperature)
     HAL_GPIO_WritePin(LD_Alarm_GPIO_Port, LD_Alarm_Pin, GPIO_PIN_SET);
     App_RequestPatternBeep(3U, 500U);
   }
-  else {
+  else if (appErrorCode == APP_ERROR_NONE) {
     HAL_GPIO_WritePin(LD_Alarm_GPIO_Port, LD_Alarm_Pin, GPIO_PIN_RESET);
   }
 }
@@ -1285,6 +1325,7 @@ static void App_ResetToInitialIdle(void)
   activeProgramIndex = 0xFFU;
   runCompleteLatched = 0U;
   HAL_GPIO_WritePin(LD_Alarm_GPIO_Port, LD_Alarm_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(LD_Alarm_GPIO_Port, LD_Alarm_Pin, GPIO_PIN_RESET);
 
   HAL_GPIO_WritePin(SSR_Heater_GPIO_Port, SSR_Heater_Pin, GPIO_PIN_RESET);
   HAL_GPIO_WritePin(SSR_HResistor_GPIO_Port, SSR_HResistor_Pin, GPIO_PIN_RESET);
@@ -1292,6 +1333,20 @@ static void App_ResetToInitialIdle(void)
   HAL_GPIO_WritePin(Relay_Valve_2_GPIO_Port, Relay_Valve_2_Pin, GPIO_PIN_RESET);
   HAL_GPIO_WritePin(Relay_Valve_3_GPIO_Port, Relay_Valve_3_Pin, GPIO_PIN_RESET);
   HAL_GPIO_WritePin(Relay_Valve_4_GPIO_Port, Relay_Valve_4_Pin, GPIO_PIN_RESET);
+}
+
+static void App_RaiseError(AppErrorCode code)
+{
+  if (code == APP_ERROR_NONE) {
+    return;
+  }
+
+  if (appErrorCode != code) {
+    App_RequestPatternBeep(3U, 500U);
+  }
+
+  appErrorCode = code;
+  HAL_GPIO_WritePin(LD_Alarm_GPIO_Port, LD_Alarm_Pin, GPIO_PIN_SET);
 }
 
 /* USER CODE END 4 */
