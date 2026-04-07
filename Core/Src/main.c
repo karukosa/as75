@@ -85,6 +85,7 @@ typedef enum {
 #define HEATER_PID_KP 18.0
 #define HEATER_PID_KI 0.35
 #define HEATER_PID_KD 35.0
+#define EMERGENCY_STOP_TEMP_TENTHS 1360
 
 /* USER CODE END PD */
 
@@ -182,6 +183,8 @@ static void App_HandleStartupChecks(void);
 static void App_InitHeaterPid(void);
 static void App_PrepareHoldPid(uint32_t now);
 static GPIO_PinState App_ComputeHoldHeaterState(uint32_t now);
+static void App_EmergencyStop(uint8_t isOverTemperature);
+static void App_ResetToInitialIdle(void);
 
 /* USER CODE END PFP */
 
@@ -503,23 +506,45 @@ static void App_HandleInput(uint32_t now)
 
   for (uint8_t i = 0U; i < 6U; ++i) {
     if (ButtonInput_ConsumePressed(&programButtons[i]) != 0U) {
+      if (appMode == APP_MODE_RUN_PROGRAM) {
+        App_RequestShortBeep();
+        continue;
+      }
+      /* Nút chương trình hoạt động kiểu "radio":
+         chọn P mới thì P cũ tự bỏ chọn, luôn giữ đúng 1 chương trình đang chọn. */
       App_StartProgram(i, &programPresets[i]);
       App_RequestShortBeep();
     }
   }
 
   if (ButtonInput_ConsumePressed(&buttonUser) != 0U) {
-    appMode = APP_MODE_USER_EDIT;
-    selectedUserField = USER_FIELD_TEMP;
-    activeProgramIndex = 0xFFU;
-    activeConfig = userConfig;
-    runCompleteLatched = 0U;
-    lastDisplaySwapTick = now;
-    App_RequestShortBeep();
+    if (appMode == APP_MODE_RUN_PROGRAM) {
+      App_RequestShortBeep();
+    }
+    else {
+      if (appMode == APP_MODE_USER_EDIT) {
+        appMode = APP_MODE_IDLE;
+        activeProgramIndex = 0xFFU;
+        runCompleteLatched = 0U;
+      }
+      else {
+        appMode = APP_MODE_USER_EDIT;
+        selectedUserField = USER_FIELD_TEMP;
+        activeProgramIndex = 0xFFU;
+        activeConfig = userConfig;
+        runCompleteLatched = 0U;
+        lastDisplaySwapTick = now;
+      }
+      App_RequestShortBeep();
+    }
   }
 
   if (ButtonInput_ConsumePressed(&buttonStart) != 0U) {
-    if (appMode == APP_MODE_READY || appMode == APP_MODE_USER_EDIT) {
+    if (appMode == APP_MODE_RUN_PROGRAM) {
+      App_ResetToInitialIdle();
+      App_RequestShortBeep();
+    }
+    else if (appMode == APP_MODE_READY || appMode == APP_MODE_USER_EDIT) {
       HAL_GPIO_WritePin(LD_Alarm_GPIO_Port, LD_Alarm_Pin, GPIO_PIN_RESET);
       if (appMode == APP_MODE_USER_EDIT) {
         userConfig = activeConfig;
@@ -1043,6 +1068,11 @@ static void App_UpdateRunState(uint32_t now)
     return;
   }
 
+  if ((pt100TemperatureValid != 0U) && (pt100TempTenths >= EMERGENCY_STOP_TEMP_TENTHS)) {
+    App_EmergencyStop(1U);
+    return;
+  }
+
   if (App_IsRunStageTimedOut(now) != 0U) {
     App_MoveToNextRunStage(now);
   }
@@ -1222,6 +1252,46 @@ static void App_ActivateRunStage(RunStage stage, uint32_t now)
       runStageDurationMs = 0U;
       break;
   }
+}
+static void App_EmergencyStop(uint8_t isOverTemperature)
+{
+  appMode = APP_MODE_IDLE;
+  runStage = RUN_STAGE_IDLE;
+  runStageDurationMs = 0U;
+  activeProgramIndex = 0xFFU;
+  runCompleteLatched = 0U;
+
+  HAL_GPIO_WritePin(SSR_Heater_GPIO_Port, SSR_Heater_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(SSR_HResistor_GPIO_Port, SSR_HResistor_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(Relay_Pump_GPIO_Port, Relay_Pump_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(Relay_Valve_2_GPIO_Port, Relay_Valve_2_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(Relay_Valve_3_GPIO_Port, Relay_Valve_3_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(Relay_Valve_4_GPIO_Port, Relay_Valve_4_Pin, GPIO_PIN_RESET);
+
+  if (isOverTemperature != 0U) {
+    HAL_GPIO_WritePin(LD_Alarm_GPIO_Port, LD_Alarm_Pin, GPIO_PIN_SET);
+    App_RequestPatternBeep(4U, 300U);
+  }
+  else {
+    HAL_GPIO_WritePin(LD_Alarm_GPIO_Port, LD_Alarm_Pin, GPIO_PIN_RESET);
+  }
+}
+
+static void App_ResetToInitialIdle(void)
+{
+  appMode = APP_MODE_IDLE;
+  runStage = RUN_STAGE_IDLE;
+  runStageDurationMs = 0U;
+  activeProgramIndex = 0xFFU;
+  runCompleteLatched = 0U;
+  HAL_GPIO_WritePin(LD_Alarm_GPIO_Port, LD_Alarm_Pin, GPIO_PIN_RESET);
+
+  HAL_GPIO_WritePin(SSR_Heater_GPIO_Port, SSR_Heater_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(SSR_HResistor_GPIO_Port, SSR_HResistor_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(Relay_Pump_GPIO_Port, Relay_Pump_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(Relay_Valve_2_GPIO_Port, Relay_Valve_2_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(Relay_Valve_3_GPIO_Port, Relay_Valve_3_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(Relay_Valve_4_GPIO_Port, Relay_Valve_4_Pin, GPIO_PIN_RESET);
 }
 
 /* USER CODE END 4 */
