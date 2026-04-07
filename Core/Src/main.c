@@ -14,7 +14,7 @@
   * If no LICENSE file comes with this software, it is provided AS-IS.
   *
   ******************************************************************************
-  *Made by Karukosa aka Vũ Nam Hưng
+  *Made by Vũ Nam Hưng aka Karukosa
   */
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
@@ -118,7 +118,6 @@ static UserField selectedUserField = USER_FIELD_TEMP;
 static uint8_t activeProgramIndex = 0xFFU;
 static uint32_t lastDisplaySwapTick = 0U;
 static uint32_t programStartTick = 0U;
-static uint32_t programDurationMs = 0U;
 static RunStage runStage = RUN_STAGE_IDLE;
 static uint32_t runStageStartTick = 0U;
 static uint32_t runStageDurationMs = 0U;
@@ -717,7 +716,6 @@ static void App_StartProgram(uint8_t index, const ProgramConfig *cfg)
 static void App_BeginRun(void)
 {
   programStartTick = HAL_GetTick();
-  programDurationMs = ((uint32_t)activeConfig.sterilizeMinutes + (uint32_t)activeConfig.dryMinutes) * 60000U;
   appMode = APP_MODE_RUN_PROGRAM;
   lastDisplaySwapTick = programStartTick;
   runCompleteLatched = 0U;
@@ -1205,7 +1203,8 @@ static void App_ActivateRunStage(RunStage stage, uint32_t now)
       runStageDurationMs = 0U;
       break;
     case RUN_STAGE_HOLD:
-      runStageDurationMs = programDurationMs;
+      /* Giữ nhiệt chỉ theo thời gian tiệt trùng (St), không cộng thời gian sấy (Dr). */
+      runStageDurationMs = (uint32_t)activeConfig.sterilizeMinutes * 60000U;
       App_PrepareHoldPid(now);
       break;
     case RUN_STAGE_VENT:
