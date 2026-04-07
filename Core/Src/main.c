@@ -1270,7 +1270,7 @@ static void App_EmergencyStop(uint8_t isOverTemperature)
 
   if (isOverTemperature != 0U) {
     HAL_GPIO_WritePin(LD_Alarm_GPIO_Port, LD_Alarm_Pin, GPIO_PIN_SET);
-    App_RequestPatternBeep(4U, 300U);
+    App_RequestPatternBeep(3U, 500U);
   }
   else {
     HAL_GPIO_WritePin(LD_Alarm_GPIO_Port, LD_Alarm_Pin, GPIO_PIN_RESET);
