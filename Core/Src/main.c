@@ -1155,6 +1155,7 @@ static void App_ApplyRunOutputs(uint32_t now)
 static uint8_t App_IsRunStageTimedOut(uint32_t now)
 {
   if (runStage == RUN_STAGE_HEAT) {
+	/* HEAT dùng điều kiện nhiệt độ đạt setpoint thay cho timer stage. */
     if (pt100TemperatureValid == 0U) {
       return 0U;
     }
@@ -1200,10 +1201,12 @@ static void App_ActivateRunStage(RunStage stage, uint32_t now)
       runStageDurationMs = RUN_STAGE_VACUUM_MS;
       break;
     case RUN_STAGE_HEAT:
+      /* Pha HEAT không chạy theo timer cố định.
+    	       Kết thúc khi App_IsRunStageTimedOut() xác nhận PT100 đạt setpoint. */
       runStageDurationMs = 0U;
       break;
     case RUN_STAGE_HOLD:
-      /* Giữ nhiệt chỉ theo thời gian tiệt trùng (St), không cộng thời gian sấy (Dr). */
+      /* Giữ nhiệt theo thời gian tiệt trùng (St). */
       runStageDurationMs = (uint32_t)activeConfig.sterilizeMinutes * 60000U;
       App_PrepareHoldPid(now);
       break;
@@ -1211,6 +1214,7 @@ static void App_ActivateRunStage(RunStage stage, uint32_t now)
       runStageDurationMs = RUN_STAGE_VENT_MS;
       break;
     case RUN_STAGE_DRY:
+      /* Sấy theo thời gian sấy (Dr). */
       runStageDurationMs = (uint32_t)activeConfig.dryMinutes * 60000U;
       break;
     case RUN_STAGE_IDLE:
