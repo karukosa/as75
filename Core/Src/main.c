@@ -79,7 +79,7 @@ typedef enum {
 #define DISPLAY_SWAP_MS 1200U
 #define BUZZER_SHORT_MS 300U
 #define PT100_SAMPLE_MS 500U
-#define WATER_REFILL_TIMEOUT_MS 30000U
+#define WATER_REFILL_TIMEOUT_MS 120000U
 #define RUN_STAGE_VACUUM_MS 780000U
 #define RUN_STAGE_VENT_DRAIN_MS 120000U
 #define RUN_STAGE_VENT_RELEASE_MS 120000U
@@ -775,16 +775,12 @@ static void App_UpdateLeds(uint32_t now)
     HAL_GPIO_WritePin(LD_C7_GPIO_Port, LD_C7_Pin, c7State);
   }
   else {
-    HAL_GPIO_WritePin(LD_C1_GPIO_Port, LD_C1_Pin,
-                      (selectedUserField == USER_FIELD_TEMP && appMode == APP_MODE_USER_EDIT) ? blink : GPIO_PIN_RESET);
-    HAL_GPIO_WritePin(LD_C2_GPIO_Port, LD_C2_Pin,
-                      (selectedUserField == USER_FIELD_STERILIZE && appMode == APP_MODE_USER_EDIT) ? blink : GPIO_PIN_RESET);
-    HAL_GPIO_WritePin(LD_C3_GPIO_Port, LD_C3_Pin,
-                      (selectedUserField == USER_FIELD_DRY && appMode == APP_MODE_USER_EDIT) ? blink : GPIO_PIN_RESET);
-    HAL_GPIO_WritePin(LD_C4_GPIO_Port, LD_C4_Pin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(LD_C1_GPIO_Port, LD_C1_Pin, GPIO_PIN_RESET);
+	HAL_GPIO_WritePin(LD_C2_GPIO_Port, LD_C2_Pin, GPIO_PIN_RESET);
+	HAL_GPIO_WritePin(LD_C3_GPIO_Port, LD_C3_Pin, GPIO_PIN_RESET);
+	HAL_GPIO_WritePin(LD_C4_GPIO_Port, LD_C4_Pin, GPIO_PIN_RESET);
     HAL_GPIO_WritePin(LD_C5_GPIO_Port, LD_C5_Pin, GPIO_PIN_RESET);
-    HAL_GPIO_WritePin(LD_C6_GPIO_Port, LD_C6_Pin, GPIO_PIN_RESET);
-    HAL_GPIO_WritePin(LD_C7_GPIO_Port, LD_C7_Pin, GPIO_PIN_RESET);
+	HAL_GPIO_WritePin(LD_C6_GPIO_Port, LD_C6_Pin, GPIO_PIN_RESET);
   }
 
   HAL_GPIO_WritePin(LD_Start_GPIO_Port, LD_Start_Pin, (appMode == APP_MODE_RUN_PROGRAM) ? GPIO_PIN_SET : GPIO_PIN_RESET);
