@@ -601,7 +601,6 @@ static void App_HandleInput(uint32_t now)
 static void App_UpdateDisplay(uint32_t now)
 {
   uint8_t blinkState = App_BlinkState(now);
-  uint8_t showSterilize;
   uint32_t elapsedMs;
   uint32_t remainingMs;
   uint8_t remainingMinutes;
@@ -609,11 +608,16 @@ static void App_UpdateDisplay(uint32_t now)
   if (appErrorCode != APP_ERROR_NONE) {
     App_DisplayError(appErrorCode);
   }
-  else if (pt100TemperatureValid != 0U) {
-    tm1637DisplayDecimalTenths(&display2, pt100TempTenths);
+  else if (appMode == APP_MODE_RUN_PROGRAM) {
+    if (pt100TemperatureValid != 0U) {
+      tm1637DisplayDecimalTenths(&display2, pt100TempTenths);
+    }
+    else {
+      App_DisplayError(APP_ERROR_PT100);
+    }
   }
   else {
-    App_DisplayError(APP_ERROR_PT100);
+    tm1637DisplayDecimalTenths(&display2, activeConfig.steamTempTenths);
   }
 
   if (appMode == APP_MODE_USER_EDIT) {
@@ -638,31 +642,30 @@ static void App_UpdateDisplay(uint32_t now)
     }
 
     return;
-  }
+    }
 
   if (appMode == APP_MODE_RUN_PROGRAM) {
-    if (runStage == RUN_STAGE_HEAT) {
-      elapsedMs = now - runStageStartTick;
-      remainingMs = (elapsedMs >= HEAT_TIMEOUT_MS) ? 0U : (HEAT_TIMEOUT_MS - elapsedMs);
-      remainingMinutes = (uint8_t)((remainingMs + 59999U) / 60000U);
-      App_DisplayStValue(remainingMinutes);
-      return;
+      if (runStage == RUN_STAGE_HEAT) {
+        elapsedMs = now - runStageStartTick;
+        remainingMs = (elapsedMs >= HEAT_TIMEOUT_MS) ? 0U : (HEAT_TIMEOUT_MS - elapsedMs);
+        remainingMinutes = (uint8_t)((remainingMs + 59999U) / 60000U);
+        App_DisplayStValue(remainingMinutes);
+        return;
+      }
+
+      if (runStage == RUN_STAGE_DRY) {
+        elapsedMs = now - runStageStartTick;
+        remainingMs = (elapsedMs >= runStageDurationMs) ? 0U : (runStageDurationMs - elapsedMs);
+        remainingMinutes = (uint8_t)((remainingMs + 59999U) / 60000U);
+        App_DisplayDrValue(remainingMinutes);
+        return;
+      }
     }
 
-  if (runStage == RUN_STAGE_DRY) {
-    elapsedMs = now - runStageStartTick;
-    remainingMs = (elapsedMs >= runStageDurationMs) ? 0U : (runStageDurationMs - elapsedMs);
-    remainingMinutes = (uint8_t)((remainingMs + 59999U) / 60000U);
-    App_DisplayDrValue(remainingMinutes);
-    return;
+    if ((((now - lastDisplaySwapTick) / DISPLAY_SWAP_MS) % 2U) == 0U) {
+      App_DisplayStValue(activeConfig.sterilizeMinutes);
     }
-  }
-
-  showSterilize = (((now - lastDisplaySwapTick) / DISPLAY_SWAP_MS) % 2U) == 0U;
-  if (showSterilize != 0U) {
-    App_DisplayStValue(activeConfig.sterilizeMinutes);
-  }
-  else {
+    else {
     App_DisplayDrValue(activeConfig.dryMinutes);
   }
 }
@@ -1396,7 +1399,8 @@ static void App_ResetToInitialIdle(void)
   runStageDurationMs = 0U;
   activeProgramIndex = 0xFFU;
   runCompleteLatched = 0U;
-  HAL_GPIO_WritePin(LD_Alarm_GPIO_Port, LD_Alarm_Pin, GPIO_PIN_RESET);
+  runUsesUserConfig = 0U;
+  appErrorCode = APP_ERROR_NONE;
   HAL_GPIO_WritePin(LD_Alarm_GPIO_Port, LD_Alarm_Pin, GPIO_PIN_RESET);
 
   HAL_GPIO_WritePin(SSR_Heater_GPIO_Port, SSR_Heater_Pin, GPIO_PIN_RESET);
