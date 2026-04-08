@@ -186,7 +186,7 @@ static uint8_t App_IsRunStageTimedOut(uint32_t now);
 static void App_ApplyRunOutputs(uint32_t now);
 static void App_InitPt100(void);
 static void App_UpdatePt100(uint32_t now);
-static void App_DisplayError(AppErrorCode code);
+static void App_DisplayError(TM1637Handle *display, AppErrorCode code);
 static uint8_t App_PreStartChecks(void);
 static uint8_t App_CheckWaterReady(void);
 static uint8_t App_CheckDoorClosed(void);
@@ -246,7 +246,9 @@ int main(void)
   while (1)
   {
     /* USER CODE END WHILE */
-    MX_USB_HOST_Process();
+	uint32_t now = HAL_GetTick();
+
+	MX_USB_HOST_Process();
 
     /* USER CODE BEGIN 3 */
     App_HandleStartupChecks();
@@ -606,14 +608,18 @@ static void App_UpdateDisplay(uint32_t now)
   uint8_t remainingMinutes;
 
   if (appErrorCode != APP_ERROR_NONE) {
-    App_DisplayError(appErrorCode);
+    tm1637Clear(&display1);
+    App_DisplayError(&display2, appErrorCode);
+    return;
   }
   else if (appMode == APP_MODE_RUN_PROGRAM) {
     if (pt100TemperatureValid != 0U) {
       tm1637DisplayDecimalTenths(&display2, pt100TempTenths);
     }
     else {
-      App_DisplayError(APP_ERROR_PT100);
+      tm1637Clear(&display1);
+      App_DisplayError(&display2, APP_ERROR_PT100);
+      return;
     }
   }
   else {
@@ -945,10 +951,14 @@ static void App_UpdatePt100(uint32_t now)
     }
   }
 
-static void App_DisplayError(AppErrorCode code)
+static void App_DisplayError(TM1637Handle *display, AppErrorCode code)
 {
   uint8_t segments[4] = {0};
   uint8_t errorNumber = (uint8_t)code;
+
+  if (display == NULL) {
+    return;
+  }
 
   if (errorNumber > 99U) {
     errorNumber = 99U;
@@ -958,7 +968,7 @@ static void App_DisplayError(AppErrorCode code)
   segments[1] = App_EncodeSegmentChar('r');
   segments[2] = App_EncodeSegmentChar((char)('0' + ((errorNumber / 10U) % 10U)));
   segments[3] = App_EncodeSegmentChar((char)('0' + (errorNumber % 10U)));
-  tm1637DisplaySegments(&display2, segments);
+  tm1637DisplaySegments(display, segments);
 }
 
 static uint8_t App_PreStartChecks(void)
@@ -985,17 +995,25 @@ static uint8_t App_CheckWaterReady(void)
     HAL_GPIO_WritePin(LD_HW_GPIO_Port, LD_HW_Pin, GPIO_PIN_SET);
 
     while ((HAL_GetTick() - startTick) < WATER_REFILL_TIMEOUT_MS) {
+      uint32_t now = HAL_GetTick();
+
       if (HAL_GPIO_ReadPin(Water_Sennor_GPIO_Port, Water_Sennor_Pin) == GPIO_PIN_RESET) {
         break;
       }
+
+      /* Tránh vòng lặp busy-wait làm "đơ" hiển thị/còi trong lúc chờ cấp nước. */
+      App_UpdateDisplay(now);
+      App_UpdateLeds(now);
+      App_UpdateBuzzer(now);
+      HAL_Delay(10U);
     }
 
     HAL_GPIO_WritePin(Relay_Valve_1_GPIO_Port, Relay_Valve_1_Pin, GPIO_PIN_RESET);
-      if (HAL_GPIO_ReadPin(Water_Sennor_GPIO_Port, Water_Sennor_Pin) == GPIO_PIN_SET) {
-        App_RaiseError(APP_ERROR_WATER);
-        return 0U;
-      }
+    if (HAL_GPIO_ReadPin(Water_Sennor_GPIO_Port, Water_Sennor_Pin) == GPIO_PIN_SET) {
+      App_RaiseError(APP_ERROR_WATER);
+      return 0U;
     }
+  }
 
     if (appErrorCode == APP_ERROR_WATER) {
       appErrorCode = APP_ERROR_NONE;
@@ -1004,9 +1022,9 @@ static uint8_t App_CheckWaterReady(void)
     HAL_GPIO_WritePin(LD_HW_GPIO_Port, LD_HW_Pin, GPIO_PIN_RESET);
     if (appErrorCode == APP_ERROR_NONE) {
       HAL_GPIO_WritePin(LD_Alarm_GPIO_Port, LD_Alarm_Pin, GPIO_PIN_RESET);
-    }
-    return 1U;
   }
+    return 1U;
+}
 
 static uint8_t App_IsWaterSufficient(void)
 {
