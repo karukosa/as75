@@ -153,6 +153,7 @@ static uint32_t heaterPidWindowStartTick = 0U;
 static uint8_t heaterPidReady = 0U;
 static uint32_t heaterPidOnTimeMs = 0U;
 static AppErrorCode appErrorCode = APP_ERROR_NONE;
+static uint8_t runUsesUserConfig = 0U;
 
 /* USER CODE END PV */
 
@@ -601,6 +602,9 @@ static void App_UpdateDisplay(uint32_t now)
 {
   uint8_t blinkState = App_BlinkState(now);
   uint8_t showSterilize;
+  uint32_t elapsedMs;
+  uint32_t remainingMs;
+  uint8_t remainingMinutes;
 
   if (appErrorCode != APP_ERROR_NONE) {
     App_DisplayError(appErrorCode);
@@ -636,6 +640,24 @@ static void App_UpdateDisplay(uint32_t now)
     return;
   }
 
+  if (appMode == APP_MODE_RUN_PROGRAM) {
+    if (runStage == RUN_STAGE_HEAT) {
+      elapsedMs = now - runStageStartTick;
+      remainingMs = (elapsedMs >= HEAT_TIMEOUT_MS) ? 0U : (HEAT_TIMEOUT_MS - elapsedMs);
+      remainingMinutes = (uint8_t)((remainingMs + 59999U) / 60000U);
+      App_DisplayStValue(remainingMinutes);
+      return;
+    }
+
+  if (runStage == RUN_STAGE_DRY) {
+    elapsedMs = now - runStageStartTick;
+    remainingMs = (elapsedMs >= runStageDurationMs) ? 0U : (runStageDurationMs - elapsedMs);
+    remainingMinutes = (uint8_t)((remainingMs + 59999U) / 60000U);
+    App_DisplayDrValue(remainingMinutes);
+    return;
+    }
+  }
+
   showSterilize = (((now - lastDisplaySwapTick) / DISPLAY_SWAP_MS) % 2U) == 0U;
   if (showSterilize != 0U) {
     App_DisplayStValue(activeConfig.sterilizeMinutes);
@@ -661,7 +683,15 @@ static void App_UpdateLeds(uint32_t now)
     HAL_GPIO_WritePin(programPorts[i], programPins[i], state);
   }
 
-  HAL_GPIO_WritePin(LD_User_GPIO_Port, LD_User_Pin, (appMode == APP_MODE_USER_EDIT) ? blink : GPIO_PIN_RESET);
+  if (appMode == APP_MODE_USER_EDIT) {
+      HAL_GPIO_WritePin(LD_User_GPIO_Port, LD_User_Pin, blink);
+  }
+  else if (appMode == APP_MODE_RUN_PROGRAM && runUsesUserConfig != 0U) {
+    HAL_GPIO_WritePin(LD_User_GPIO_Port, LD_User_Pin, GPIO_PIN_SET);
+  }
+  else {
+    HAL_GPIO_WritePin(LD_User_GPIO_Port, LD_User_Pin, GPIO_PIN_RESET);
+  }
 
   if (runCompleteLatched != 0U) {
     GPIO_PinState completeState = GPIO_PIN_SET;
@@ -690,28 +720,42 @@ static void App_UpdateLeds(uint32_t now)
       c1State = blink;
     }
     else if (runStage == RUN_STAGE_HEAT) {
+      c1State = GPIO_PIN_SET;
       c2State = blink;
     }
     else if (runStage == RUN_STAGE_HOLD) {
       uint8_t holdSegment = 0U;
+      c1State = GPIO_PIN_SET;
+      c2State = GPIO_PIN_SET;
       if (runStageDurationMs > 0U) {
         uint32_t elapsed = now - runStageStartTick;
         holdSegment = (uint8_t)((elapsed * 3U) / runStageDurationMs);
         if (holdSegment > 2U) {
           holdSegment = 2U;
-        }
+         }
       }
 
       c3State = (holdSegment > 0U) ? GPIO_PIN_SET : blink;
       c4State = (holdSegment > 1U) ? GPIO_PIN_SET : ((holdSegment == 1U) ? blink : GPIO_PIN_RESET);
       c5State = (holdSegment == 2U) ? blink : GPIO_PIN_RESET;
     }
-    else if (runStage == RUN_STAGE_VENT) {
-       c6State = blink;
-    }
-    else if (runStage == RUN_STAGE_DRY) {
-      c7State = blink;
-    }
+      else if (runStage == RUN_STAGE_VENT) {
+        c1State = GPIO_PIN_SET;
+        c2State = GPIO_PIN_SET;
+        c3State = GPIO_PIN_SET;
+        c4State = GPIO_PIN_SET;
+        c5State = GPIO_PIN_SET;
+        c6State = blink;
+      }
+      else if (runStage == RUN_STAGE_DRY) {
+        c1State = GPIO_PIN_SET;
+        c2State = GPIO_PIN_SET;
+        c3State = GPIO_PIN_SET;
+        c4State = GPIO_PIN_SET;
+        c5State = GPIO_PIN_SET;
+        c6State = GPIO_PIN_SET;
+        c7State = blink;
+      }
 
     HAL_GPIO_WritePin(LD_C1_GPIO_Port, LD_C1_Pin, c1State);
     HAL_GPIO_WritePin(LD_C2_GPIO_Port, LD_C2_Pin, c2State);
@@ -751,10 +795,12 @@ static void App_StartProgram(uint8_t index, const ProgramConfig *cfg)
   appMode = APP_MODE_READY;
   lastDisplaySwapTick = HAL_GetTick();
   runCompleteLatched = 0U;
+  runUsesUserConfig = 0U;
 }
 
-static void App_BeginRun(void)
-{
+ static void App_BeginRun(void)
+ {
+  runUsesUserConfig = (appMode == APP_MODE_USER_EDIT) ? 1U : 0U;
   programStartTick = HAL_GetTick();
   appErrorCode = APP_ERROR_NONE;
   appMode = APP_MODE_RUN_PROGRAM;
@@ -1325,6 +1371,7 @@ static void App_EmergencyStop(uint8_t isOverTemperature)
   runStageDurationMs = 0U;
   activeProgramIndex = 0xFFU;
   runCompleteLatched = 0U;
+  runUsesUserConfig = 0U;
 
   HAL_GPIO_WritePin(SSR_Heater_GPIO_Port, SSR_Heater_Pin, GPIO_PIN_RESET);
   HAL_GPIO_WritePin(SSR_HResistor_GPIO_Port, SSR_HResistor_Pin, GPIO_PIN_RESET);
