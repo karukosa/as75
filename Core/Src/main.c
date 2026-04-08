@@ -189,6 +189,7 @@ static void App_DisplayError(AppErrorCode code);
 static uint8_t App_PreStartChecks(void);
 static uint8_t App_CheckWaterReady(void);
 static uint8_t App_CheckDoorClosed(void);
+static uint8_t App_IsWaterSufficient(void);
 static void App_HandleStartupChecks(void);
 static void App_InitHeaterPid(void);
 static void App_PrepareHoldPid(uint32_t now);
@@ -958,6 +959,12 @@ static uint8_t App_CheckWaterReady(void)
     return 1U;
   }
 
+static uint8_t App_IsWaterSufficient(void)
+{
+  /* PC11 (Water_Sennor): HIGH = thiếu nước, LOW = đủ nước */
+  return (HAL_GPIO_ReadPin(Water_Sennor_GPIO_Port, Water_Sennor_Pin) == GPIO_PIN_RESET) ? 1U : 0U;
+}
+
 static uint8_t App_CheckDoorClosed(void)
 {
   /* PB13 (L_Switch): HIGH = cửa đã đóng */
@@ -1102,6 +1109,24 @@ static void App_UpdateRunState(uint32_t now)
     return;
   }
 
+  if (pt100TemperatureValid == 0U) {
+    App_RaiseError(APP_ERROR_PT100);
+    App_EmergencyStop(0U);
+    return;
+  }
+
+  if (App_CheckDoorClosed() == 0U) {
+    App_EmergencyStop(0U);
+    return;
+  }
+
+  if ((runStage == RUN_STAGE_VACUUM || runStage == RUN_STAGE_HEAT || runStage == RUN_STAGE_HOLD) &&
+         (App_IsWaterSufficient() == 0U)) {
+    App_RaiseError(APP_ERROR_WATER);
+    App_EmergencyStop(0U);
+    return;
+  }
+
   if ((pt100TemperatureValid != 0U) && (pt100TempTenths >= EMERGENCY_STOP_TEMP_TENTHS)) {
     App_EmergencyStop(1U);
     return;
@@ -1161,7 +1186,7 @@ static void App_ApplyRunOutputs(uint32_t now)
 
       case RUN_STAGE_HEAT:
         /* Gia nhiệt đến đúng nhiệt độ mục tiêu của chương trình P1-P6 hoặc User */
-        if (pt100TemperatureValid == 0U || pt100TempTenths < (int16_t)activeConfig.steamTempTenths) {
+        if ((pt100TemperatureValid != 0U) && (pt100TempTenths < (int16_t)activeConfig.steamTempTenths)) {
           steamHeaterState = GPIO_PIN_SET;
         }
         break;
@@ -1193,7 +1218,7 @@ static void App_ApplyRunOutputs(uint32_t now)
       case RUN_STAGE_DRY:
         /* Giai đoạn sấy: bật pump liên tục và điều khiển PE11 giữ quanh 80°C */
         pumpState = GPIO_PIN_SET;
-        if (pt100TemperatureValid == 0U || pt100TempTenths < 780) {
+        if ((pt100TemperatureValid != 0U) && (pt100TempTenths < 780)) {
           dryHeaterState = GPIO_PIN_SET;
         }
         else if (pt100TempTenths > 820) {
