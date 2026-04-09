@@ -5,8 +5,8 @@ Tác giả: Vũ Nam Hưng aka Karukosa
 
 ## Bảng vận hành + lỗi theo giai đoạn 
 
-| Giai đoạn | Hành động chình	                               | Lỗi có thể xuất hiện         | Hành vi khi lỗi                               | 
-=============================================================================================================================================
+| Giai đoạn | Hành động chình	                               | Lỗi có thể xuất hiện         | Hành vi khi lỗi                               |
+
 | Khởi động | Kiểm tra điều khiển trước khi vận hành         | Er01, Er02                   | Giữ ở trạng thái lỗi, chưa cho chạy chu trình.|
 | Chờ chạy  | Chọn chương trình, bấm START để vào run        | Er02, Er03                   | Không vào RUN cho đến khi điều kiện đạt.      |
 | Vacuum    | Hút chân không + gia nhiệt xen kẽ theo chu kỳ  | Er01, Er02, Er03, Er05       | Dừng an toàn ngay.                            |     
