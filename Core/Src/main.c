@@ -94,7 +94,7 @@ typedef enum {
 #define HEATER_PID_KP 18.0
 #define HEATER_PID_KI 0.35
 #define HEATER_PID_KD 15.0
-#define EMERGENCY_STOP_TEMP_TENTHS 1360
+#define EMERGENCY_STOP_TEMP_TENTHS 1380
 #define HEAT_TIMEOUT_MS 2100000U
 
 /* USER CODE END PD */
@@ -119,8 +119,8 @@ static ButtonInput buttonUp;
 static ButtonInput buttonDown;
 
 static const ProgramConfig programPresets[6] = {
-    {1210U, 25U, 15U}, {1250U, 30U, 20U}, {1280U, 35U, 20U},
-    {1320U, 40U, 25U}, {1340U, 45U, 25U}, {1360U, 50U, 30U}};
+    {1210U, 15U, 0U}, {121U, 20U, 15U}, {1320U, 7U, 10U},
+    {1340U, 7U, 10U}, {1340U, 10U, 20U}, {1340U, 5U, 5U}};
 
 static ProgramConfig userConfig = {1210U, 25U, 15U};
 static ProgramConfig activeConfig = {1210U, 25U, 15U};
@@ -824,8 +824,8 @@ static void App_AdjustUserField(int16_t delta)
     if (nextValue < 1050) {
       nextValue = 1050;
     }
-    if (nextValue > 1450) {
-      nextValue = 1450;
+    if (nextValue > 1340) {
+      nextValue = 1340;
     }
     activeConfig.steamTempTenths = (uint16_t)nextValue;
   }
