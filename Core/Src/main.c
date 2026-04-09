@@ -119,7 +119,7 @@ static ButtonInput buttonUp;
 static ButtonInput buttonDown;
 
 static const ProgramConfig programPresets[6] = {
-    {1210U, 15U, 0U}, {121U, 20U, 15U}, {1320U, 7U, 10U},
+    {1210U, 15U, 0U}, {1210U, 20U, 15U}, {1320U, 7U, 10U},
     {1340U, 7U, 10U}, {1340U, 10U, 20U}, {1340U, 5U, 5U}};
 
 static ProgramConfig userConfig = {1210U, 25U, 15U};
