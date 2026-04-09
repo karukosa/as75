@@ -65,7 +65,8 @@ typedef enum {
   APP_ERROR_PT100 = 1,
   APP_ERROR_WATER = 2,
   APP_ERROR_DOOR = 3,
-  APP_ERROR_HEAT_TIMEOUT = 4
+  APP_ERROR_HEAT_TIMEOUT = 4,
+  APP_ERROR_OVER_TEMPERATURE = 5
 } AppErrorCode;
 
 /* USER CODE END PTD */
@@ -1191,6 +1192,7 @@ static void App_UpdateRunState(uint32_t now)
   }
 
   if ((pt100TemperatureValid != 0U) && (pt100TempTenths >= EMERGENCY_STOP_TEMP_TENTHS)) {
+	App_RaiseError(APP_ERROR_OVER_TEMPERATURE);
     App_EmergencyStop(1U);
     return;
   }
