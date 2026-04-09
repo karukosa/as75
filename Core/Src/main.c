@@ -84,7 +84,7 @@ typedef enum {
 #define RUN_STAGE_VACUUM_MS 780000U
 #define RUN_STAGE_VENT_DRAIN_MS 120000U
 #define RUN_STAGE_VENT_RELEASE_MS 120000U
-#define RUN_STAGE_VENT_VACUUM_MS 180000U
+#define RUN_STAGE_VENT_VACUUM_MS 300000U
 #define RUN_STAGE_VENT_MS (RUN_STAGE_VENT_DRAIN_MS + RUN_STAGE_VENT_RELEASE_MS + RUN_STAGE_VENT_VACUUM_MS)
 #define RUN_COMPLETE_BLINK_MS 3000U
 #define RUN_STAGE_VACUUM_SUB_STEPS 5U
@@ -1273,7 +1273,7 @@ static void App_ApplyRunOutputs(uint32_t now)
           valve4State = GPIO_PIN_SET;
         }
         else {
-          /* 3 phút cuối: bật pump + valve 2 để hút chân không. */
+          /* 5 phút cuối: bật pump + valve 2 để hút chân không. */
           pumpState = GPIO_PIN_SET;
           valve2State = GPIO_PIN_SET;
         }
