@@ -558,7 +558,7 @@ static void App_HandleInput(uint32_t now)
   if (ButtonInput_ConsumePressed(&buttonStart) != 0U) {
     if (appMode == APP_MODE_RUN_PROGRAM) {
       App_ResetToInitialIdle();
-      App_RequestShortBeep();
+      App_RequestPatternBeep(1U, 1000U);
     }
     else if (appMode == APP_MODE_READY || appMode == APP_MODE_USER_EDIT) {
       HAL_GPIO_WritePin(LD_Alarm_GPIO_Port, LD_Alarm_Pin, GPIO_PIN_RESET);
