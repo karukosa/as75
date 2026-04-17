@@ -88,6 +88,11 @@ typedef enum {
 #define RUN_STAGE_VENT_MS (RUN_STAGE_VENT_DRAIN_MS + RUN_STAGE_VENT_RELEASE_MS + RUN_STAGE_VENT_VACUUM_MS)
 #define RUN_COMPLETE_BLINK_MS 3000U
 #define RUN_STAGE_VACUUM_SUB_STEPS 5U
+#define VALVE5_POST_RUN_DELAY_MS 5000U
+#define VALVE5_POST_RUN_PRIME_MS 5000U
+#define VALVE5_DRY_PRIME_PULSE_MS 3000U
+#define VALVE5_DRY_MIN_THRESHOLD_MS (15U * 60000U)
+#define VALVE5_DRY_EXTENDED_THRESHOLD_MS (40U * 60000U)
 #define HEATER_PID_WINDOW_MS 2000U
 #define HEATER_PID_SAMPLE_MS 500U
 #define HEATER_PID_OUTPUT_MAX_PERCENT 100.0
@@ -155,6 +160,13 @@ static uint8_t heaterPidReady = 0U;
 static uint32_t heaterPidOnTimeMs = 0U;
 static AppErrorCode appErrorCode = APP_ERROR_NONE;
 static uint8_t runUsesUserConfig = 0U;
+static GPIO_PinState lastPumpCommand = GPIO_PIN_RESET;
+static uint32_t pumpLastOffTick = 0U;
+static uint8_t valve5PostRunArmed = 0U;
+static uint8_t valve5PostRunDone = 0U;
+static uint8_t valve5DryPrimeMask = 0U;
+static uint8_t valve5DryPrimePulseActive = 0U;
+static uint32_t valve5DryPrimePulseStartTick = 0U;
 
 /* USER CODE END PV */
 
@@ -812,6 +824,12 @@ static void App_StartProgram(uint8_t index, const ProgramConfig *cfg)
   appMode = APP_MODE_RUN_PROGRAM;
   lastDisplaySwapTick = programStartTick;
   runCompleteLatched = 0U;
+  valve5PostRunArmed = 0U;
+  valve5PostRunDone = 0U;
+  valve5DryPrimeMask = 0U;
+  valve5DryPrimePulseActive = 0U;
+  lastPumpCommand = GPIO_PIN_RESET;
+  pumpLastOffTick = programStartTick;
   App_ActivateRunStage(RUN_STAGE_VACUUM, programStartTick);
 }
 
@@ -1211,6 +1229,8 @@ static void App_UpdateRunState(uint32_t now)
     appMode = APP_MODE_READY;
     runCompleteLatched = 1U;
     runCompleteTick = now;
+    valve5PostRunArmed = 1U;
+    valve5PostRunDone = 0U;
     App_RequestPatternBeep(3U, 1000U);
   }
 }
@@ -1221,6 +1241,7 @@ static void App_ApplyRunOutputs(uint32_t now)
   GPIO_PinState valve2State = GPIO_PIN_RESET;
   GPIO_PinState valve3State = GPIO_PIN_RESET;
   GPIO_PinState valve4State = GPIO_PIN_RESET;
+  GPIO_PinState valve5State = GPIO_PIN_RESET;
   GPIO_PinState steamHeaterState = GPIO_PIN_RESET;
   GPIO_PinState dryHeaterState = GPIO_PIN_RESET;
 
@@ -1304,10 +1325,76 @@ static void App_ApplyRunOutputs(uint32_t now)
     valve4State = GPIO_PIN_SET;
   }
 
+  if (lastPumpCommand == GPIO_PIN_SET && pumpState == GPIO_PIN_RESET) {
+    pumpLastOffTick = now;
+  }
+  lastPumpCommand = pumpState;
+
+  if (runStage == RUN_STAGE_DRY && appMode == APP_MODE_RUN_PROGRAM) {
+    uint32_t dryDurationMs = (uint32_t)activeConfig.dryMinutes * 60000U;
+    uint32_t elapsed = now - runStageStartTick;
+    uint8_t requiredMask = 0U;
+
+    if (dryDurationMs > VALVE5_DRY_MIN_THRESHOLD_MS) {
+      requiredMask = (uint8_t)(requiredMask | 0x01U | 0x02U);
+    }
+    if (dryDurationMs > VALVE5_DRY_EXTENDED_THRESHOLD_MS) {
+      requiredMask = (uint8_t)(requiredMask | 0x04U);
+    }
+
+    if (requiredMask != 0U && valve5DryPrimePulseActive == 0U) {
+      uint32_t threshold30 = (dryDurationMs * 30U) / 100U;
+      uint32_t threshold60 = (dryDurationMs * 60U) / 100U;
+      uint32_t threshold85 = (dryDurationMs * 85U) / 100U;
+      uint8_t triggerMask = 0U;
+
+      if (((requiredMask & 0x01U) != 0U) && ((valve5DryPrimeMask & 0x01U) == 0U) && elapsed >= threshold30) {
+        triggerMask = 0x01U;
+      }
+      else if (((requiredMask & 0x02U) != 0U) && ((valve5DryPrimeMask & 0x02U) == 0U) && elapsed >= threshold60) {
+        triggerMask = 0x02U;
+      }
+      else if (((requiredMask & 0x04U) != 0U) && ((valve5DryPrimeMask & 0x04U) == 0U) && elapsed >= threshold85) {
+        triggerMask = 0x04U;
+      }
+
+      if (triggerMask != 0U) {
+        valve5DryPrimeMask = (uint8_t)(valve5DryPrimeMask | triggerMask);
+        valve5DryPrimePulseActive = 1U;
+        valve5DryPrimePulseStartTick = now;
+      }
+    }
+  }
+  else {
+    valve5DryPrimePulseActive = 0U;
+  }
+
+  if (valve5DryPrimePulseActive != 0U) {
+    if ((now - valve5DryPrimePulseStartTick) < VALVE5_DRY_PRIME_PULSE_MS) {
+      valve5State = GPIO_PIN_SET;
+    }
+    else {
+      valve5DryPrimePulseActive = 0U;
+    }
+  }
+
+  if (valve5PostRunArmed != 0U && valve5PostRunDone == 0U) {
+    uint32_t sincePumpOff = now - pumpLastOffTick;
+    if (sincePumpOff >= VALVE5_POST_RUN_DELAY_MS) {
+      if (sincePumpOff < (VALVE5_POST_RUN_DELAY_MS + VALVE5_POST_RUN_PRIME_MS)) {
+        valve5State = GPIO_PIN_SET;
+      }
+      else {
+        valve5PostRunDone = 1U;
+      }
+    }
+  }
+
   HAL_GPIO_WritePin(Relay_Pump_GPIO_Port, Relay_Pump_Pin, pumpState);
   HAL_GPIO_WritePin(Relay_Valve_2_GPIO_Port, Relay_Valve_2_Pin, valve2State);
   HAL_GPIO_WritePin(Relay_Valve_3_GPIO_Port, Relay_Valve_3_Pin, valve3State);
   HAL_GPIO_WritePin(Relay_Valve_4_GPIO_Port, Relay_Valve_4_Pin, valve4State);
+  HAL_GPIO_WritePin(Relay_Valve_5_GPIO_Port, Relay_Valve_5_Pin, valve5State);
   HAL_GPIO_WritePin(SSR_Heater_GPIO_Port, SSR_Heater_Pin, steamHeaterState);
   HAL_GPIO_WritePin(SSR_HResistor_GPIO_Port, SSR_HResistor_Pin, dryHeaterState);
 }
@@ -1362,7 +1449,7 @@ static void App_ActivateRunStage(RunStage stage, uint32_t now)
       break;
     case RUN_STAGE_HEAT:
       /* Pha HEAT không chạy theo timer cố định.
-    	       Kết thúc khi App_IsRunStageTimedOut() xác nhận PT100 đạt setpoint. */
+               Kết thúc khi App_IsRunStageTimedOut() xác nhận PT100 đạt setpoint. */
       runStageDurationMs = 0U;
       break;
     case RUN_STAGE_HOLD:
@@ -1376,6 +1463,8 @@ static void App_ActivateRunStage(RunStage stage, uint32_t now)
     case RUN_STAGE_DRY:
       /* Sấy theo thời gian sấy (Dr). */
       runStageDurationMs = (uint32_t)activeConfig.dryMinutes * 60000U;
+      valve5DryPrimeMask = 0U;
+      valve5DryPrimePulseActive = 0U;
       break;
     case RUN_STAGE_IDLE:
     default:
@@ -1391,6 +1480,10 @@ static void App_EmergencyStop(uint8_t isOverTemperature)
   activeProgramIndex = 0xFFU;
   runCompleteLatched = 0U;
   runUsesUserConfig = 0U;
+  valve5PostRunArmed = 0U;
+  valve5PostRunDone = 0U;
+  valve5DryPrimeMask = 0U;
+  valve5DryPrimePulseActive = 0U;
 
   HAL_GPIO_WritePin(SSR_Heater_GPIO_Port, SSR_Heater_Pin, GPIO_PIN_RESET);
   HAL_GPIO_WritePin(SSR_HResistor_GPIO_Port, SSR_HResistor_Pin, GPIO_PIN_RESET);
@@ -1398,6 +1491,7 @@ static void App_EmergencyStop(uint8_t isOverTemperature)
   HAL_GPIO_WritePin(Relay_Valve_2_GPIO_Port, Relay_Valve_2_Pin, GPIO_PIN_RESET);
   HAL_GPIO_WritePin(Relay_Valve_3_GPIO_Port, Relay_Valve_3_Pin, GPIO_PIN_RESET);
   HAL_GPIO_WritePin(Relay_Valve_4_GPIO_Port, Relay_Valve_4_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(Relay_Valve_5_GPIO_Port, Relay_Valve_5_Pin, GPIO_PIN_RESET);
 
   if (isOverTemperature != 0U) {
     HAL_GPIO_WritePin(LD_Alarm_GPIO_Port, LD_Alarm_Pin, GPIO_PIN_SET);
@@ -1416,6 +1510,10 @@ static void App_ResetToInitialIdle(void)
   activeProgramIndex = 0xFFU;
   runCompleteLatched = 0U;
   runUsesUserConfig = 0U;
+  valve5PostRunArmed = 0U;
+  valve5PostRunDone = 0U;
+  valve5DryPrimeMask = 0U;
+  valve5DryPrimePulseActive = 0U;
   appErrorCode = APP_ERROR_NONE;
   HAL_GPIO_WritePin(LD_Alarm_GPIO_Port, LD_Alarm_Pin, GPIO_PIN_RESET);
 
@@ -1425,6 +1523,7 @@ static void App_ResetToInitialIdle(void)
   HAL_GPIO_WritePin(Relay_Valve_2_GPIO_Port, Relay_Valve_2_Pin, GPIO_PIN_RESET);
   HAL_GPIO_WritePin(Relay_Valve_3_GPIO_Port, Relay_Valve_3_Pin, GPIO_PIN_RESET);
   HAL_GPIO_WritePin(Relay_Valve_4_GPIO_Port, Relay_Valve_4_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(Relay_Valve_5_GPIO_Port, Relay_Valve_5_Pin, GPIO_PIN_RESET);
 }
 
 static void App_RaiseError(AppErrorCode code)
