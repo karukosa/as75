@@ -16,3 +16,20 @@ Tác giả: Vũ Nam Hưng aka Karukosa
 | Dry       | Sấy theo thời gian, giữ nhiệt ngưỡng nhiệt sấy | Er01, Er03, Er05.            | Dừng an toàn ngay.                            |    
 | Hoàn tất  | Báo hoàn thành và về Chờ chạy                  | x                            | x                                             |
 
+## Kiểm tra logic Valve 5 (mồi nước cho bơm)
+
+Trong firmware hiện tại, `Valve 5` (PB12) được điều khiển để phục vụ mồi nước theo 2 cơ chế:
+
+1. **Mồi sau khi bơm dừng ở cuối chu trình**
+   - Sau khi chương trình chạy xong, hệ thống chờ `5 giây`.
+   - Sau đó mở `Valve 5` trong `5 giây` để mồi nước.
+2. **Mồi xung trong giai đoạn sấy (Dry)**
+   - Nếu thời gian sấy lớn hơn `15 phút`, mở xung `Valve 5` ở mốc `30%` và `60%` thời gian sấy (mỗi xung `3 giây`).
+   - Nếu thời gian sấy lớn hơn `40 phút`, thêm một xung ở mốc `85%` thời gian sấy (cũng `3 giây`).
+
+Các ngưỡng đang dùng trong mã nguồn:
+- `VALVE5_POST_RUN_DELAY_MS = 5000`
+- `VALVE5_POST_RUN_PRIME_MS = 5000`
+- `VALVE5_DRY_PRIME_PULSE_MS = 3000`
+- `VALVE5_DRY_MIN_THRESHOLD_MS = 15 * 60000`
+- `VALVE5_DRY_EXTENDED_THRESHOLD_MS = 40 * 60000`
