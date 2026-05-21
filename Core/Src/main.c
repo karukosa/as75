@@ -995,7 +995,7 @@ static uint8_t App_CheckWaterReady(void)
 {
   uint32_t startTick = HAL_GetTick();
 
-  /* PC11 (Water_Sennor): HIGH = thiếu nước, LOW = đủ nước */
+  /* PC10 (Water_Sennor): HIGH = thiếu nước, LOW = đủ nước */
   if (HAL_GPIO_ReadPin(Water_Sennor_GPIO_Port, Water_Sennor_Pin) == GPIO_PIN_SET) {
     HAL_GPIO_WritePin(Relay_Valve_1_GPIO_Port, Relay_Valve_1_Pin, GPIO_PIN_SET);
     HAL_GPIO_WritePin(LD_LW_GPIO_Port, LD_LW_Pin, GPIO_PIN_RESET);
@@ -1035,7 +1035,7 @@ static uint8_t App_CheckWaterReady(void)
 
 static uint8_t App_IsWaterSufficient(void)
 {
-  /* PC11 (Water_Sennor): HIGH = thiếu nước, LOW = đủ nước */
+  /* PC10 (Water_Sennor): HIGH = thiếu nước, LOW = đủ nước */
   return (HAL_GPIO_ReadPin(Water_Sennor_GPIO_Port, Water_Sennor_Pin) == GPIO_PIN_RESET) ? 1U : 0U;
 }
 
