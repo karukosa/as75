@@ -266,12 +266,12 @@ int main(void)
     /* USER CODE BEGIN 3 */
     App_HandleStartupChecks();
     App_UpdateButtons();
-    App_HandleInput(HAL_GetTick());
-    App_UpdatePt100(HAL_GetTick());
-    App_UpdateRunState(HAL_GetTick());
-    App_UpdateDisplay(HAL_GetTick());
-    App_UpdateLeds(HAL_GetTick());
-    App_UpdateBuzzer(HAL_GetTick());
+    App_HandleInput(now);
+    App_UpdatePt100(now);
+    App_UpdateRunState(now);
+    App_UpdateDisplay(now);
+    App_UpdateLeds(now);
+    App_UpdateBuzzer(now);
   }
   /* USER CODE END 3 */
 }
@@ -466,14 +466,6 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : I2S3_SD_Pin */
-  GPIO_InitStruct.Pin = I2S3_SD_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  GPIO_InitStruct.Alternate = GPIO_AF6_SPI3;
-  HAL_GPIO_Init(I2S3_SD_GPIO_Port, &GPIO_InitStruct);
 
 /* USER CODE BEGIN MX_GPIO_Init_2 */
 /* USER CODE END MX_GPIO_Init_2 */
