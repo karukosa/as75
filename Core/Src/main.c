@@ -911,12 +911,14 @@ static uint8_t App_EncodeSegmentChar(char c)
 
 static void App_InitPt100(void)
 {
-  Max31865_Init(&pt100Sensor, &hspi1, CS_GPIO_Port, CS_Pin, 430.0f, 100.0f);
-  if (Max31865_Begin(&pt100Sensor, PT100_WIRE_MODE, 1U) == 0U) {
-    pt100TemperatureValid = 0U;
-    pt100FaultCode = 0xFFU;
-    App_RaiseError(APP_ERROR_PT100);
-    return;
+	Max31865_Init(&pt100Sensor, &hspi1, CS_GPIO_Port, CS_Pin, 430.0f, 100.0f);
+	  if (Max31865_Begin(&pt100Sensor, PT100_WIRE_MODE, 1U) == 0U) {
+	    pt100TemperatureValid = 0U;
+	    pt100FaultCode = 0xFFU;
+	    if (appMode == APP_MODE_RUN_PROGRAM) {
+	      App_RaiseError(APP_ERROR_PT100);
+	    }
+	    return;
   }
 
   lastPt100SampleTick = HAL_GetTick() - PT100_SAMPLE_MS;
@@ -933,11 +935,13 @@ static void App_UpdatePt100(uint32_t now)
   }
 
   lastPt100SampleTick = now;
-   if (Max31865_ReadTemperatureTenthsC(&pt100Sensor, &measuredTempTenths) == 0U) {
-     pt100TemperatureValid = 0U;
-     pt100FaultCode = 0xFFU;
-     App_RaiseError(APP_ERROR_PT100);
-     return;
+  if (Max31865_ReadTemperatureTenthsC(&pt100Sensor, &measuredTempTenths) == 0U) {
+       pt100TemperatureValid = 0U;
+       pt100FaultCode = 0xFFU;
+       if (appMode == APP_MODE_RUN_PROGRAM) {
+         App_RaiseError(APP_ERROR_PT100);
+       }
+       return;
    }
 
    pt100FaultCode = Max31865_ReadFault(&pt100Sensor, MAX31865_FAULT_AUTO);
@@ -945,16 +949,20 @@ static void App_UpdatePt100(uint32_t now)
      /* Retry 1 lần để tránh nhiễu tức thời trên bus SPI/PT100. */
      Max31865_ClearFault(&pt100Sensor);
      if (Max31865_ReadTemperatureTenthsC(&pt100Sensor, &measuredTempTenths) == 0U) {
-       pt100TemperatureValid = 0U;
-       App_RaiseError(APP_ERROR_PT100);
-       return;
+           pt100TemperatureValid = 0U;
+           if (appMode == APP_MODE_RUN_PROGRAM) {
+             App_RaiseError(APP_ERROR_PT100);
+           }
+           return;
      }
 
      pt100FaultCode = Max31865_ReadFault(&pt100Sensor, MAX31865_FAULT_AUTO);
      if (pt100FaultCode != 0U) {
-       pt100TemperatureValid = 0U;
-       App_RaiseError(APP_ERROR_PT100);
-       return;
+            pt100TemperatureValid = 0U;
+            if (appMode == APP_MODE_RUN_PROGRAM) {
+              App_RaiseError(APP_ERROR_PT100);
+            }
+            return;
      }
    }
 
