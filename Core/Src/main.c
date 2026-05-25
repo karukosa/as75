@@ -80,6 +80,7 @@ typedef enum {
 #define DISPLAY_SWAP_MS 1200U
 #define BUZZER_SHORT_MS 300U
 #define PT100_SAMPLE_MS 500U
+#define PT100_WIRE_MODE MAX31865_2WIRE
 #define WATER_REFILL_TIMEOUT_MS 120000U
 #define RUN_STAGE_VACUUM_MS 780000U
 #define RUN_STAGE_VENT_DRAIN_MS 120000U
@@ -342,7 +343,7 @@ static void MX_SPI1_Init(void)
   hspi1.Init.Direction = SPI_DIRECTION_2LINES;
   hspi1.Init.DataSize = SPI_DATASIZE_8BIT;
   hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
-  hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
+  hspi1.Init.CLKPhase = SPI_PHASE_2EDGE;
   hspi1.Init.NSS = SPI_NSS_SOFT;
   hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_2;
   hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
@@ -911,7 +912,7 @@ static uint8_t App_EncodeSegmentChar(char c)
 static void App_InitPt100(void)
 {
   Max31865_Init(&pt100Sensor, &hspi1, CS_GPIO_Port, CS_Pin, 430.0f, 100.0f);
-  if (Max31865_Begin(&pt100Sensor, MAX31865_3WIRE, 1U) == 0U) {
+  if (Max31865_Begin(&pt100Sensor, PT100_WIRE_MODE, 1U) == 0U) {
     pt100TemperatureValid = 0U;
     pt100FaultCode = 0xFFU;
     App_RaiseError(APP_ERROR_PT100);
@@ -939,11 +940,22 @@ static void App_UpdatePt100(uint32_t now)
      return;
    }
 
-   pt100FaultCode = Max31865_ReadFault(&pt100Sensor, MAX31865_FAULT_NONE);
+   pt100FaultCode = Max31865_ReadFault(&pt100Sensor, MAX31865_FAULT_AUTO);
    if (pt100FaultCode != 0U) {
-     pt100TemperatureValid = 0U;
-     App_RaiseError(APP_ERROR_PT100);
-     return;
+     /* Retry 1 lần để tránh nhiễu tức thời trên bus SPI/PT100. */
+     Max31865_ClearFault(&pt100Sensor);
+     if (Max31865_ReadTemperatureTenthsC(&pt100Sensor, &measuredTempTenths) == 0U) {
+       pt100TemperatureValid = 0U;
+       App_RaiseError(APP_ERROR_PT100);
+       return;
+     }
+
+     pt100FaultCode = Max31865_ReadFault(&pt100Sensor, MAX31865_FAULT_AUTO);
+     if (pt100FaultCode != 0U) {
+       pt100TemperatureValid = 0U;
+       App_RaiseError(APP_ERROR_PT100);
+       return;
+     }
    }
 
   if (measuredTempTenths < 0) {
