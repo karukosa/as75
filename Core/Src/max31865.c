@@ -1,4 +1,4 @@
-/*
+/*␊
  * max31865.c
  *
  *  Created on: Mar 25, 2026
@@ -142,27 +142,27 @@ void Max31865_ClearFault(Max31865Handle *handle)
 uint8_t Max31865_ReadFault(Max31865Handle *handle, Max31865FaultCycle faultCycle)
 {
     uint8_t fault = 0U;
+    uint8_t config;
 
-    if (handle == NULL) {
+    if (handle == NULL || max31865ReadRegister8(handle, MAX31865_CONFIG_REG, &config) == 0U) {
         return 0U;
     }
 
     if (faultCycle == MAX31865_FAULT_AUTO) {
         Max31865_ClearFault(handle);
-        (void)max31865WriteRegister8(handle, MAX31865_CONFIG_REG,
-                                     (uint8_t)(MAX31865_CONFIG_BIAS | MAX31865_CONFIG_MODEAUTO |
-                                               ((handle->filter50Hz != 0U) ? MAX31865_CONFIG_FILT50HZ : 0U)));
+        config |= (uint8_t)(MAX31865_CONFIG_BIAS | MAX31865_CONFIG_MODEAUTO);
+        (void)max31865WriteRegister8(handle, MAX31865_CONFIG_REG, config);
         HAL_Delay(1U);
     }
     else if (faultCycle == MAX31865_FAULT_MANUAL_RUN) {
-        uint8_t config = (uint8_t)(MAX31865_CONFIG_BIAS |
-                                   ((handle->filter50Hz != 0U) ? MAX31865_CONFIG_FILT50HZ : 0U));
+        config |= MAX31865_CONFIG_BIAS;
+        config &= (uint8_t)~MAX31865_CONFIG_MODEAUTO;
         (void)max31865WriteRegister8(handle, MAX31865_CONFIG_REG, config);
         HAL_Delay(1U);
     }
     else if (faultCycle == MAX31865_FAULT_MANUAL_FINISH) {
-        (void)max31865WriteRegister8(handle, MAX31865_CONFIG_REG,
-                                     (uint8_t)(((handle->filter50Hz != 0U) ? MAX31865_CONFIG_FILT50HZ : 0U)));
+        config &= (uint8_t)~(MAX31865_CONFIG_BIAS | MAX31865_CONFIG_MODEAUTO);
+        (void)max31865WriteRegister8(handle, MAX31865_CONFIG_REG, config);
     }
 
     (void)max31865ReadRegister8(handle, MAX31865_FAULTSTAT_REG, &fault);
