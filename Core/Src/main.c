@@ -944,7 +944,7 @@ static void App_UpdatePt100(uint32_t now)
        return;
    }
 
-   pt100FaultCode = Max31865_ReadFault(&pt100Sensor, MAX31865_FAULT_AUTO);
+   pt100FaultCode = Max31865_ReadFault(&pt100Sensor, MAX31865_FAULT_NONE);
    if (pt100FaultCode != 0U) {
      /* Retry 1 lần để tránh nhiễu tức thời trên bus SPI/PT100. */
      Max31865_ClearFault(&pt100Sensor);
@@ -956,7 +956,7 @@ static void App_UpdatePt100(uint32_t now)
            return;
      }
 
-     pt100FaultCode = Max31865_ReadFault(&pt100Sensor, MAX31865_FAULT_AUTO);
+     pt100FaultCode = Max31865_ReadFault(&pt100Sensor, MAX31865_FAULT_NONE);
      if (pt100FaultCode != 0U) {
             pt100TemperatureValid = 0U;
             if (appMode == APP_MODE_RUN_PROGRAM) {

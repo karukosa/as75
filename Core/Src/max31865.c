@@ -148,20 +148,20 @@ uint8_t Max31865_ReadFault(Max31865Handle *handle, Max31865FaultCycle faultCycle
         return 0U;
     }
 
+    config &= (uint8_t)~0x0CU;
     if (faultCycle == MAX31865_FAULT_AUTO) {
         Max31865_ClearFault(handle);
-        config |= (uint8_t)(MAX31865_CONFIG_BIAS | MAX31865_CONFIG_MODEAUTO);
+        config |= (uint8_t)(MAX31865_CONFIG_BIAS | 0x04U);
         (void)max31865WriteRegister8(handle, MAX31865_CONFIG_REG, config);
-        HAL_Delay(1U);
+        HAL_Delay(2U);
     }
     else if (faultCycle == MAX31865_FAULT_MANUAL_RUN) {
-        config |= MAX31865_CONFIG_BIAS;
-        config &= (uint8_t)~MAX31865_CONFIG_MODEAUTO;
+        config |= (uint8_t)(MAX31865_CONFIG_BIAS | 0x08U);
         (void)max31865WriteRegister8(handle, MAX31865_CONFIG_REG, config);
-        HAL_Delay(1U);
+        HAL_Delay(2U);
     }
     else if (faultCycle == MAX31865_FAULT_MANUAL_FINISH) {
-        config &= (uint8_t)~(MAX31865_CONFIG_BIAS | MAX31865_CONFIG_MODEAUTO);
+        config |= (uint8_t)(MAX31865_CONFIG_BIAS | 0x0CU);
         (void)max31865WriteRegister8(handle, MAX31865_CONFIG_REG, config);
     }
 
