@@ -82,6 +82,8 @@ typedef enum {
 #define PT100_SAMPLE_MS 500U
 #define PT100_WIRE_MODE MAX31865_3WIRE
 #define WATER_REFILL_TIMEOUT_MS 120000U
+#define WATER_SENSOR_FILTER_SAMPLES 5U
+#define WATER_SENSOR_FILTER_DELAY_MS 3U
 #define RUN_STAGE_VACUUM_MS 780000U
 #define RUN_STAGE_VENT_DRAIN_MS 120000U
 #define RUN_STAGE_VENT_RELEASE_MS 120000U
@@ -205,6 +207,7 @@ static uint8_t App_PreStartChecks(void);
 static uint8_t App_CheckWaterReady(void);
 static uint8_t App_CheckDoorClosed(void);
 static uint8_t App_IsWaterSufficient(void);
+static GPIO_PinState App_ReadWaterLevelStableState(void);
 static void App_HandleStartupChecks(void);
 static void App_InitHeaterPid(void);
 static void App_PrepareHoldPid(uint32_t now);
@@ -386,7 +389,7 @@ static void MX_GPIO_Init(void)
                           |Relay_Valve_3_Pin|Relay_Valve_4_Pin|LD_C1_Pin|LD_C2_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, DRDY_Pin|CS_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, CS_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOB, Buzzer_Pin|Relay_Valve_5_Pin|CLK1_Pin|DIO1_Pin
@@ -412,14 +415,21 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
 
   /*Configure GPIO pins : B_P1_Pin B_P2_Pin B_P3_Pin B_P4_Pin
-                           B_P5_Pin B_P6_Pin B_Start_Pin B_Set_Pin
-                           B_Up_Pin B_Down_Pin B_User_Pin Water_Sennor_Pin */
-  GPIO_InitStruct.Pin = B_P1_Pin|B_P2_Pin|B_P3_Pin|B_P4_Pin
-                          |B_P5_Pin|B_P6_Pin|B_Start_Pin|B_Set_Pin
-                          |B_Up_Pin|B_Down_Pin|B_User_Pin|Water_Sennor_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+                             B_P5_Pin B_P6_Pin B_Start_Pin B_Set_Pin
+                             B_Up_Pin B_Down_Pin B_User_Pin */
+    GPIO_InitStruct.Pin = B_P1_Pin|B_P2_Pin|B_P3_Pin|B_P4_Pin
+                            |B_P5_Pin|B_P6_Pin|B_Start_Pin|B_Set_Pin
+                            |B_Up_Pin|B_Down_Pin|B_User_Pin;
+    GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+    /*Configure GPIO pin : Water_Sennor_Pin (PC10)
+      Mức HIGH = thiếu nước, mức LOW = đủ nước */
+    GPIO_InitStruct.Pin = Water_Sennor_Pin;
+    GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+    GPIO_InitStruct.Pull = GPIO_PULLUP;
+    HAL_GPIO_Init(Water_Sennor_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : B1_Pin */
   GPIO_InitStruct.Pin = B1_Pin;
@@ -935,6 +945,8 @@ static void App_UpdatePt100(uint32_t now)
   }
 
   lastPt100SampleTick = now;
+  /* Xóa cờ lỗi tồn trước khi đo để tránh treo Er01 giả khi cảm biến/PT100 vẫn tốt. */
+  Max31865_ClearFault(&pt100Sensor);
   if (Max31865_ReadTemperatureTenthsC(&pt100Sensor, &measuredTempTenths) == 0U) {
        pt100TemperatureValid = 0U;
        pt100FaultCode = 0xFFU;
@@ -944,31 +956,35 @@ static void App_UpdatePt100(uint32_t now)
        return;
    }
 
-   pt100FaultCode = Max31865_ReadFault(&pt100Sensor, MAX31865_FAULT_NONE);
-   if (pt100FaultCode != 0U) {
-     /* Retry 1 lần để tránh nhiễu tức thời trên bus SPI/PT100. */
-     Max31865_ClearFault(&pt100Sensor);
-     if (Max31865_ReadTemperatureTenthsC(&pt100Sensor, &measuredTempTenths) == 0U) {
-           pt100TemperatureValid = 0U;
-           if (appMode == APP_MODE_RUN_PROGRAM) {
-             App_RaiseError(APP_ERROR_PT100);
-           }
-           return;
-     }
+  pt100FaultCode = Max31865_ReadFault(&pt100Sensor, MAX31865_FAULT_NONE);
+    if (pt100FaultCode != 0U) {
+      uint8_t retry;
 
-     pt100FaultCode = Max31865_ReadFault(&pt100Sensor, MAX31865_FAULT_NONE);
-     if (pt100FaultCode != 0U) {
-            pt100TemperatureValid = 0U;
-            if (appMode == APP_MODE_RUN_PROGRAM) {
-              App_RaiseError(APP_ERROR_PT100);
-            }
-            return;
-     }
-   }
+      /* Retry 2 lần để lọc nhiễu tức thời trên bus SPI/PT100. */
+      for (retry = 0U; retry < 2U; retry++) {
+        Max31865_ClearFault(&pt100Sensor);
+        if (Max31865_ReadTemperatureTenthsC(&pt100Sensor, &measuredTempTenths) == 0U) {
+          pt100TemperatureValid = 0U;
+          if (appMode == APP_MODE_RUN_PROGRAM) {
+            App_RaiseError(APP_ERROR_PT100);
+          }
+          return;
+        }
 
-  if (measuredTempTenths < 0) {
-    measuredTempTenths = 0;
-  }
+        pt100FaultCode = Max31865_ReadFault(&pt100Sensor, MAX31865_FAULT_NONE);
+        if (pt100FaultCode == 0U) {
+          break;
+        }
+      }
+
+      if (pt100FaultCode != 0U) {
+        pt100TemperatureValid = 0U;
+        if (appMode == APP_MODE_RUN_PROGRAM) {
+          App_RaiseError(APP_ERROR_PT100);
+        }
+        return;
+      }
+    }
 
   pt100TempTenths = measuredTempTenths;
   pt100TemperatureValid = 1U;
@@ -1016,16 +1032,16 @@ static uint8_t App_CheckWaterReady(void)
   uint32_t startTick = HAL_GetTick();
 
   /* PC10 (Water_Sennor): HIGH = thiếu nước, LOW = đủ nước */
-  if (HAL_GPIO_ReadPin(Water_Sennor_GPIO_Port, Water_Sennor_Pin) == GPIO_PIN_SET) {
-    HAL_GPIO_WritePin(Relay_Valve_1_GPIO_Port, Relay_Valve_1_Pin, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(LD_LW_GPIO_Port, LD_LW_Pin, GPIO_PIN_RESET);
-    HAL_GPIO_WritePin(LD_HW_GPIO_Port, LD_HW_Pin, GPIO_PIN_SET);
+    if (App_ReadWaterLevelStableState() == GPIO_PIN_SET) {
+      HAL_GPIO_WritePin(Relay_Valve_1_GPIO_Port, Relay_Valve_1_Pin, GPIO_PIN_SET);
+      HAL_GPIO_WritePin(LD_LW_GPIO_Port, LD_LW_Pin, GPIO_PIN_RESET);
+      HAL_GPIO_WritePin(LD_HW_GPIO_Port, LD_HW_Pin, GPIO_PIN_SET);
 
     while ((HAL_GetTick() - startTick) < WATER_REFILL_TIMEOUT_MS) {
       uint32_t now = HAL_GetTick();
 
-      if (HAL_GPIO_ReadPin(Water_Sennor_GPIO_Port, Water_Sennor_Pin) == GPIO_PIN_RESET) {
-        break;
+      if (App_ReadWaterLevelStableState() == GPIO_PIN_RESET) {
+    	  break;
       }
 
       /* Tránh vòng lặp busy-wait làm "đơ" hiển thị/còi trong lúc chờ cấp nước. */
@@ -1036,7 +1052,7 @@ static uint8_t App_CheckWaterReady(void)
     }
 
     HAL_GPIO_WritePin(Relay_Valve_1_GPIO_Port, Relay_Valve_1_Pin, GPIO_PIN_RESET);
-    if (HAL_GPIO_ReadPin(Water_Sennor_GPIO_Port, Water_Sennor_Pin) == GPIO_PIN_SET) {
+    if (App_ReadWaterLevelStableState() == GPIO_PIN_SET) {
       App_RaiseError(APP_ERROR_WATER);
       return 0U;
     }
@@ -1055,8 +1071,23 @@ static uint8_t App_CheckWaterReady(void)
 
 static uint8_t App_IsWaterSufficient(void)
 {
+  return (App_ReadWaterLevelStableState() == GPIO_PIN_RESET) ? 1U : 0U;
+}
+
+static GPIO_PinState App_ReadWaterLevelStableState(void)
+{
+  uint8_t lowCount = 0U;
+  uint8_t i;
+
   /* PC10 (Water_Sennor): HIGH = thiếu nước, LOW = đủ nước */
-  return (HAL_GPIO_ReadPin(Water_Sennor_GPIO_Port, Water_Sennor_Pin) == GPIO_PIN_RESET) ? 1U : 0U;
+  for (i = 0U; i < WATER_SENSOR_FILTER_SAMPLES; i++) {
+    if (HAL_GPIO_ReadPin(Water_Sennor_GPIO_Port, Water_Sennor_Pin) == GPIO_PIN_RESET) {
+      lowCount++;
+    }
+    HAL_Delay(WATER_SENSOR_FILTER_DELAY_MS);
+  }
+
+  return (lowCount >= ((WATER_SENSOR_FILTER_SAMPLES / 2U) + 1U)) ? GPIO_PIN_RESET : GPIO_PIN_SET;
 }
 
 static uint8_t App_CheckDoorClosed(void)

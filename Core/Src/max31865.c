@@ -255,6 +255,9 @@ uint8_t Max31865_ReadTemperatureC(Max31865Handle *handle, float *temperatureC)
     }
 
     rawRtd = Max31865_ReadRTD(handle);
+    if (rawRtd == 0U) {
+        return 0U;
+    }
     *temperatureC = Max31865_CalculateTemperature(rawRtd, handle->rNominalOhms, handle->rRefOhms);
 
     return 1U;
