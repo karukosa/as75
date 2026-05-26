@@ -197,9 +197,14 @@ uint16_t Max31865_ReadRTD(Max31865Handle *handle)
     (void)max31865WriteRegister8(handle, MAX31865_CONFIG_REG, config);
     HAL_Delay(10U);
 
-    config |= MAX31865_CONFIG_1SHOT;
-    (void)max31865WriteRegister8(handle, MAX31865_CONFIG_REG, config);
-    HAL_Delay(65U);
+    if ((config & MAX31865_CONFIG_MODEAUTO) == 0U) {
+            config |= MAX31865_CONFIG_1SHOT;
+            (void)max31865WriteRegister8(handle, MAX31865_CONFIG_REG, config);
+            HAL_Delay(65U);
+        }
+        else {
+            HAL_Delay(65U);
+    }
 
     if (max31865ReadRegisterN(handle, MAX31865_RTDMSB_REG, buffer, 2U) == 0U) {
         return 0U;
@@ -208,7 +213,9 @@ uint16_t Max31865_ReadRTD(Max31865Handle *handle)
     rtd = (uint16_t)(((uint16_t)buffer[0] << 8) | buffer[1]);
     rtd >>= 1;
 
-    Max31865_EnableBias(handle, 0U);
+    if ((config & MAX31865_CONFIG_MODEAUTO) == 0U) {
+            Max31865_EnableBias(handle, 0U);
+    }
 
     return rtd;
 }

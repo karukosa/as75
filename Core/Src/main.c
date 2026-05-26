@@ -81,6 +81,8 @@ typedef enum {
 #define BUZZER_SHORT_MS 300U
 #define PT100_SAMPLE_MS 500U
 #define PT100_WIRE_MODE MAX31865_3WIRE
+#define PT100_RREF_OHMS 430.0f
+#define PT100_RNOMINAL_OHMS 100.0f
 #define WATER_REFILL_TIMEOUT_MS 120000U
 #define WATER_SENSOR_FILTER_SAMPLES 5U
 #define WATER_SENSOR_FILTER_DELAY_MS 3U
@@ -348,7 +350,7 @@ static void MX_SPI1_Init(void)
   hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
   hspi1.Init.CLKPhase = SPI_PHASE_2EDGE;
   hspi1.Init.NSS = SPI_NSS_SOFT;
-  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_2;
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16;
   hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
   hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
   hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
@@ -437,8 +439,15 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : DRDY_Pin CS_Pin */
-  GPIO_InitStruct.Pin = DRDY_Pin|CS_Pin;
+  /*Configure GPIO pin : DRDY_Pin
+    DRDY là tín hiệu báo dữ liệu sẵn sàng từ MAX31865 nên phải để INPUT. */
+  GPIO_InitStruct.Pin = DRDY_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : CS_Pin */
+  GPIO_InitStruct.Pin = CS_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -921,7 +930,7 @@ static uint8_t App_EncodeSegmentChar(char c)
 
 static void App_InitPt100(void)
 {
-	Max31865_Init(&pt100Sensor, &hspi1, CS_GPIO_Port, CS_Pin, 430.0f, 100.0f);
+	Max31865_Init(&pt100Sensor, &hspi1, CS_GPIO_Port, CS_Pin,  PT100_RREF_OHMS, PT100_RNOMINAL_OHMS);
 	  if (Max31865_Begin(&pt100Sensor, PT100_WIRE_MODE, 1U) == 0U) {
 	    pt100TemperatureValid = 0U;
 	    pt100FaultCode = 0xFFU;
@@ -930,6 +939,9 @@ static void App_InitPt100(void)
 	    }
 	    return;
   }
+  Max31865_EnableBias(&pt100Sensor, 1U);
+  Max31865_AutoConvert(&pt100Sensor, 1U);
+  HAL_Delay(70U);
 
   lastPt100SampleTick = HAL_GetTick() - PT100_SAMPLE_MS;
   pt100TemperatureValid = 0U;
