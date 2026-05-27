@@ -930,18 +930,27 @@ static uint8_t App_EncodeSegmentChar(char c)
 
 static void App_InitPt100(void)
 {
-	Max31865_Init(&pt100Sensor, &hspi1, CS_GPIO_Port, CS_Pin,  PT100_RREF_OHMS, PT100_RNOMINAL_OHMS);
-	  if (Max31865_Begin(&pt100Sensor, PT100_WIRE_MODE, 1U) == 0U) {
-	    pt100TemperatureValid = 0U;
-	    pt100FaultCode = 0xFFU;
-	    if (appMode == APP_MODE_RUN_PROGRAM) {
-	      App_RaiseError(APP_ERROR_PT100);
-	    }
-	    return;
+  uint8_t fault;
+
+  Max31865_Init(&pt100Sensor, &hspi1, CS_GPIO_Port, CS_Pin,  PT100_RREF_OHMS, PT100_RNOMINAL_OHMS);
+  if (Max31865_Begin(&pt100Sensor, PT100_WIRE_MODE, 1U) == 0U) {
+	  pt100TemperatureValid = 0U;
+	  pt100FaultCode = 0xFFU;
+	  if (appMode == APP_MODE_RUN_PROGRAM) {
+	    App_RaiseError(APP_ERROR_PT100);
+	  }
+  return;
   }
   Max31865_EnableBias(&pt100Sensor, 1U);
   Max31865_AutoConvert(&pt100Sensor, 1U);
   HAL_Delay(70U);
+  Max31865_ClearFault(&pt100Sensor);
+  fault = Max31865_ReadFault(&pt100Sensor, MAX31865_FAULT_AUTO);
+  if (fault != 0U) {
+    pt100TemperatureValid = 0U;
+    pt100FaultCode = fault;
+    return;
+  }
 
   lastPt100SampleTick = HAL_GetTick() - PT100_SAMPLE_MS;
   pt100TemperatureValid = 0U;

@@ -46,6 +46,9 @@ uint8_t Max31865_Begin(Max31865Handle *handle, Max31865NumWires wires, uint8_t f
     handle->filter50Hz = (filter50Hz != 0U) ? 1U : 0U;
     Max31865_SetWires(handle, wires);
     Max31865_Enable50Hz(handle, handle->filter50Hz);
+    Max31865_AutoConvert(handle, 0U);
+    Max31865_EnableBias(handle, 0U);
+    Max31865_SetThresholds(handle, 0x0000U, 0x7FFFU);
     Max31865_ClearFault(handle);
 
     return 1U;
@@ -171,14 +174,20 @@ uint8_t Max31865_ReadFault(Max31865Handle *handle, Max31865FaultCycle faultCycle
 
 void Max31865_SetThresholds(Max31865Handle *handle, uint16_t lower, uint16_t upper)
 {
+    uint16_t lowerShifted;
+    uint16_t upperShifted;
+
     if (handle == NULL) {
         return;
     }
 
-    (void)max31865WriteRegister8(handle, MAX31865_HFAULTMSB_REG, (uint8_t)(upper >> 8));
-    (void)max31865WriteRegister8(handle, MAX31865_HFAULTLSB_REG, (uint8_t)(upper & 0xFFU));
-    (void)max31865WriteRegister8(handle, MAX31865_LFAULTMSB_REG, (uint8_t)(lower >> 8));
-    (void)max31865WriteRegister8(handle, MAX31865_LFAULTLSB_REG, (uint8_t)(lower & 0xFFU));
+    lowerShifted = (uint16_t)((lower & 0x7FFFU) << 1);
+    upperShifted = (uint16_t)((upper & 0x7FFFU) << 1);
+
+    (void)max31865WriteRegister8(handle, MAX31865_HFAULTMSB_REG, (uint8_t)(upperShifted >> 8));
+    (void)max31865WriteRegister8(handle, MAX31865_HFAULTLSB_REG, (uint8_t)(upperShifted & 0xFFU));
+    (void)max31865WriteRegister8(handle, MAX31865_LFAULTMSB_REG, (uint8_t)(lowerShifted >> 8));
+    (void)max31865WriteRegister8(handle, MAX31865_LFAULTLSB_REG, (uint8_t)(lowerShifted & 0xFFU));
 }
 
 uint16_t Max31865_ReadRTD(Max31865Handle *handle)
