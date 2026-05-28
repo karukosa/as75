@@ -199,6 +199,7 @@ static uint8_t App_PreStartChecks(void);
 static uint8_t App_CheckWaterReady(void);
 static uint8_t App_CheckDoorClosed(void);
 static uint8_t App_IsWaterSufficient(void);
+static uint8_t App_CheckPt100Ready(void);
 static GPIO_PinState App_ReadWaterLevelStableState(void);
 static void App_HandleStartupChecks(void);
 static void App_InitHeaterPid(void);
@@ -1028,6 +1029,10 @@ static uint8_t App_PreStartChecks(void)
     return 0U;
   }
 
+  if (App_CheckPt100Ready() == 0U) {
+    return 0U;
+  }
+
   if (App_CheckDoorClosed() == 0U) {
     return 0U;
   }
@@ -1080,6 +1085,23 @@ static uint8_t App_CheckWaterReady(void)
 static uint8_t App_IsWaterSufficient(void)
 {
   return (App_ReadWaterLevelStableState() == GPIO_PIN_RESET) ? 1U : 0U;
+}
+
+static uint8_t App_CheckPt100Ready(void)
+{
+  uint32_t now = HAL_GetTick();
+  App_UpdatePt100(now);
+
+  if (pt100TemperatureValid != 0U) {
+    if (appErrorCode == APP_ERROR_PT100) {
+      appErrorCode = APP_ERROR_NONE;
+      HAL_GPIO_WritePin(LD_Alarm_GPIO_Port, LD_Alarm_Pin, GPIO_PIN_RESET);
+    }
+    return 1U;
+  }
+
+  App_RaiseError(APP_ERROR_PT100);
+  return 0U;
 }
 
 static GPIO_PinState App_ReadWaterLevelStableState(void)
@@ -1390,19 +1412,24 @@ static void App_ApplyRunOutputs(uint32_t now)
 
 static uint8_t App_IsRunStageTimedOut(uint32_t now)
 {
+  if (runStage == RUN_STAGE_VACUUM) {
+    /* Luôn giữ đủ thời gian chân không, tránh bị nhảy stage nếu duration bị reset ngoài ý muốn. */
+    return ((now - runStageStartTick) >= RUN_STAGE_VACUUM_MS) ? 1U : 0U;
+  }
+
   if (runStage == RUN_STAGE_HEAT) {
 	/* HEAT dùng điều kiện nhiệt độ đạt setpoint thay cho timer stage. */
     if (pt100TemperatureValid == 0U) {
       return 0U;
     }
     return (pt100TempTenths >= (int16_t)activeConfig.steamTempTenths) ? 1U : 0U;
-  }
+    }
 
-  if (runStageDurationMs == 0U) {
-    return 1U;
-  }
+    if (runStageDurationMs == 0U) {
+      return (runStage == RUN_STAGE_IDLE) ? 1U : 0U;
+    }
 
-  return ((now - runStageStartTick) >= runStageDurationMs) ? 1U : 0U;
+    return ((now - runStageStartTick) >= runStageDurationMs) ? 1U : 0U;
 }
 
 static void App_MoveToNextRunStage(uint32_t now)
