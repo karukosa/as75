@@ -200,19 +200,17 @@ uint16_t Max31865_ReadRTD(Max31865Handle *handle)
         return 0U;
     }
 
-    Max31865_ClearFault(handle);
-
+    /* Luôn bật bias trước khi đọc RTD để tránh giá trị dao động khi khởi động. */
     config |= MAX31865_CONFIG_BIAS;
-    (void)max31865WriteRegister8(handle, MAX31865_CONFIG_REG, config);
-    HAL_Delay(10U);
-
     if ((config & MAX31865_CONFIG_MODEAUTO) == 0U) {
-            config |= MAX31865_CONFIG_1SHOT;
-            (void)max31865WriteRegister8(handle, MAX31865_CONFIG_REG, config);
-            HAL_Delay(65U);
-        }
-        else {
-            HAL_Delay(65U);
+        /* Chế độ one-shot cần kích chuyển đổi và chờ đủ thời gian lọc. */
+        config |= MAX31865_CONFIG_1SHOT;
+        (void)max31865WriteRegister8(handle, MAX31865_CONFIG_REG, config);
+        HAL_Delay(65U);
+    }
+    else {
+        /* Auto-convert đã chạy nền, chỉ cần đồng bộ config/bias rồi đọc luôn. */
+        (void)max31865WriteRegister8(handle, MAX31865_CONFIG_REG, config);
     }
 
     if (max31865ReadRegisterN(handle, MAX31865_RTDMSB_REG, buffer, 2U) == 0U) {
@@ -220,10 +218,15 @@ uint16_t Max31865_ReadRTD(Max31865Handle *handle)
     }
 
     rtd = (uint16_t)(((uint16_t)buffer[0] << 8) | buffer[1]);
+    if ((rtd & 0x0001U) != 0U) {
+        /* Fault bit set -> dữ liệu RTD không hợp lệ. */
+        return 0U;
+    }
     rtd >>= 1;
 
+    /* Giữ bias bật trong auto mode; one-shot thì tắt để giảm tự gia nhiệt đầu dò. */
     if ((config & MAX31865_CONFIG_MODEAUTO) == 0U) {
-            Max31865_EnableBias(handle, 0U);
+        Max31865_EnableBias(handle, 0U);
     }
 
     return rtd;
@@ -271,8 +274,8 @@ uint8_t Max31865_ReadTemperatureC(Max31865Handle *handle, float *temperatureC)
     }
 
     rawRtd = Max31865_ReadRTD(handle);
-    if (rawRtd == 0U) {
-        return 0U;
+    if (rawRtd == 0U && Max31865_ReadFault(handle, MAX31865_FAULT_NONE) != 0U) {
+       return 0U;
     }
     *temperatureC = Max31865_CalculateTemperature(rawRtd, handle->rNominalOhms, handle->rRefOhms);
 
