@@ -14,7 +14,6 @@
   * If no LICENSE file comes with this software, it is provided AS-IS.
   *
   ******************************************************************************
-  *Made by Vũ Nam Hưng aka Karukosa
   */
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
@@ -23,84 +22,124 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "button_input.h"
 #include "max31865.h"
-#include "pid.h"
 #include "tm1637.h"
+#include "button_input.h"
+#include "pid.h"
 
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 typedef struct {
-  uint16_t steamTempTenths;
-  uint8_t sterilizeMinutes;
-  uint8_t dryMinutes;
+  uint16_t temperatureTenthsC;
+  uint16_t sterilizeMinutes;
+  uint16_t dryMinutes;
 } ProgramConfig;
 
-typedef enum {
-  APP_MODE_IDLE = 0,
-  APP_MODE_READY,
-  APP_MODE_RUN_PROGRAM,
-  APP_MODE_USER_EDIT
-} AppMode;
+typedef struct {
+  GPIO_TypeDef *port;
+  uint16_t pin;
+} GpioOutput;
 
 typedef enum {
-  USER_FIELD_TEMP = 0,
-  USER_FIELD_STERILIZE,
-  USER_FIELD_DRY
-} UserField;
+  USER_EDIT_TEMPERATURE = 0,
+  USER_EDIT_STERILIZE = 1,
+  USER_EDIT_DRY = 2
+} UserEditField;
 
 typedef enum {
-  RUN_STAGE_IDLE = 0,
-  RUN_STAGE_VACUUM,
-  RUN_STAGE_HEAT,
-  RUN_STAGE_HOLD,
-  RUN_STAGE_VENT,
-  RUN_STAGE_DRY
-} RunStage;
+  MAIN_PHASE_STANDBY = 0,
+  MAIN_PHASE_VACUUM,
+  MAIN_PHASE_HEATING,
+  MAIN_PHASE_HOLDING,
+  MAIN_PHASE_EXHAUST,
+  MAIN_PHASE_DRYING,
+  MAIN_PHASE_DONE
+} MainCyclePhase;
 
 typedef enum {
-  APP_ERROR_NONE = 0,
-  APP_ERROR_PT100 = 1,
-  APP_ERROR_WATER = 2,
-  APP_ERROR_DOOR = 3,
-  APP_ERROR_HEAT_TIMEOUT = 4,
-  APP_ERROR_OVER_TEMPERATURE = 5
-} AppErrorCode;
+  STARTUP_SAFETY_CHECK_PT100 = 0,
+
+  STARTUP_SAFETY_FILL_WATER,
+  STARTUP_SAFETY_READY,
+  STARTUP_SAFETY_ERROR
+} StartupSafetyState;
+
+typedef enum {
+  BUZZER_EVENT_OFF = 0,
+  BUZZER_EVENT_BUTTON,
+  BUZZER_EVENT_READY,
+  BUZZER_EVENT_START,
+  BUZZER_EVENT_STOP,
+  BUZZER_EVENT_COMPLETE,
+  BUZZER_EVENT_ERROR,
+  BUZZER_EVENT_COUNT
+} BuzzerEvent;
+
+typedef struct {
+  uint8_t pulseCount;
+  uint32_t onMs;
+  uint32_t offMs;
+ } BuzzerPattern;
+
+ typedef struct {
+  uint8_t remainingPulses;
+  uint8_t active;
+  uint8_t outputOn;
+  uint32_t onMs;
+  uint32_t offMs;
+  uint32_t lastToggleTick;
+} BuzzerSequence;
 
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define BUTTON_DEBOUNCE_MS 40U
-#define BUTTON_LONG_PRESS_MS 650U
-#define BUTTON_REPEAT_MS 120U
-#define BLINK_PERIOD_MS 350U
-#define DISPLAY_SWAP_MS 1200U
-#define BUZZER_SHORT_MS 300U
-#define PT100_SAMPLE_MS 500U
-#define PT100_WIRE_MODE MAX31865_3WIRE
-#define PT100_RREF_OHMS 430.0f
-#define PT100_RNOMINAL_OHMS 100.0f
-#define WATER_REFILL_TIMEOUT_MS 120000U
-#define WATER_SENSOR_FILTER_SAMPLES 5U
-#define WATER_SENSOR_FILTER_DELAY_MS 3U
-#define RUN_STAGE_VACUUM_MS 780000U
-#define RUN_STAGE_VENT_DRAIN_MS 120000U
-#define RUN_STAGE_VENT_RELEASE_MS 120000U
-#define RUN_STAGE_VENT_VACUUM_MS 300000U
-#define RUN_STAGE_VENT_MS (RUN_STAGE_VENT_DRAIN_MS + RUN_STAGE_VENT_RELEASE_MS + RUN_STAGE_VENT_VACUUM_MS)
-#define RUN_COMPLETE_BLINK_MS 3000U
-#define RUN_STAGE_VACUUM_SUB_STEPS 5U
-#define HEATER_PID_WINDOW_MS 2000U
-#define HEATER_PID_SAMPLE_MS 500U
-#define HEATER_PID_OUTPUT_MAX_PERCENT 100.0
-#define HEATER_PID_KP 18.0
-#define HEATER_PID_KI 0.35
-#define HEATER_PID_KD 15.0
-#define EMERGENCY_STOP_TEMP_TENTHS 1380
-#define HEAT_TIMEOUT_MS 2100000U
+#define PROGRAM_COUNT 6U
+#define PROGRAM_NONE 0xffU
+#define PROGRAM_DEBOUNCE_MS 30U
+#define PROGRAM_LONG_PRESS_MS 1000U
+#define PROGRAM_REPEAT_MS 500U
+#define PROGRAM_TIME_ALTERNATE_MS 2000U
+#define TEMPERATURE_REFRESH_MS 300U
+#define USER_BLINK_MS 500U
+#define USER_TEMPERATURE_MIN_TENTHS 1100U
+#define USER_TEMPERATURE_MAX_TENTHS 1340U
+#define USER_TEMPERATURE_STEP_TENTHS 10
+#define USER_TEMPERATURE_FAST_STEP_TENTHS 50
+#define USER_TIME_MIN_MINUTES 0U
+#define USER_TIME_MAX_MINUTES 99U
+#define USER_TIME_STEP_MINUTES 1
+#define USER_TIME_FAST_STEP_MINUTES 10
+#define MINUTE_MS 60000U
+#define MAIN_VACUUM_MS (13U * MINUTE_MS)
+#define MAIN_VACUUM_CYCLE_COUNT 3U
+#define MAIN_VACUUM_STEP_MS (MAIN_VACUUM_MS / (MAIN_VACUUM_CYCLE_COUNT * 2U))
+#define MAIN_ASSIST_JACKET_HEATER_ON_MS 10000U
+#define MAIN_ASSIST_JACKET_HEATER_OFF_MS 10000U
+#define MAIN_ASSIST_JACKET_HEATER_CUTOFF_TENTHS 100U
+#define MAIN_EXHAUST_DRAIN_MS (2U * MINUTE_MS)
+#define MAIN_EXHAUST_VACUUM_MS (3U * MINUTE_MS)
+#define MAIN_EXHAUST_MS (MAIN_EXHAUST_DRAIN_MS + MAIN_EXHAUST_VACUUM_MS)
+#define MAIN_DRY_TEMPERATURE_LOW_TENTHS 980U
+#define MAIN_DRY_TEMPERATURE_HIGH_TENTHS 1020U
+#define MAIN_DRY_HEATER_CUTOFF_MS (5U * MINUTE_MS)
+#define MAIN_HOLD_PID_WINDOW_MS 2000U
+#define MAIN_HOLD_PID_SAMPLE_MS 500U
+#define MAIN_HOLD_PID_KP 24.0
+#define MAIN_HOLD_PID_KI 0.18
+#define MAIN_HOLD_PID_KD 3.0
+#define MAIN_HOLD_PID_INITIAL_OUTPUT 96.0
+#define WATER_FILL_TIMEOUT_MS (4U * MINUTE_MS)
+/* Temporary bypass so the cycle can be tested without the water sensor/check.
+ * Set 0U to use real sensor*/
+#define WATER_CHECK_BYPASS_FOR_TEST 0U
+#define HEATING_TIMEOUT_MS (35U * MINUTE_MS)
+#define MAIN_OVER_TEMPERATURE_TENTHS 1380U
+#define MAIN_CYCLE_LED_BLINK_MS 500U
+#define ACTIVE_CHANNEL_USER 0U
+#define TEMPERATURE_READ_FAIL_MAX 3U
 
 /* USER CODE END PD */
 
@@ -113,55 +152,77 @@ typedef enum {
 SPI_HandleTypeDef hspi3;
 
 /* USER CODE BEGIN PV */
-static TM1637Handle display1;
-static TM1637Handle display2;
-static Max31865Handle pt100Sensor;
-static ButtonInput programButtons[6];
-static ButtonInput buttonUser;
-static ButtonInput buttonStart;
-static ButtonInput buttonSet;
-static ButtonInput buttonUp;
-static ButtonInput buttonDown;
+Max31865Handle gMax31865;
+TM1637Handle gDisplay1;
+TM1637Handle gDisplay2;
+ButtonInput gProgramButtons[PROGRAM_COUNT];
+ButtonInput gUserButton;
+ButtonInput gSetButton;
+ButtonInput gUpButton;
+ButtonInput gDownButton;
+ButtonInput gStartButton;
+int16_t gTemperatureTenthsC = 0;
+uint8_t gSensorReady = 0U;
+uint8_t gSelectedProgram = PROGRAM_NONE;
+uint8_t gProgramTimeDisplayPhase = 0xffU;
+uint32_t gProgramSelectedTick = 0U;
+uint32_t gLastTemperatureReadTick = 0U;
+uint8_t gUserModeActive = 0U;
+UserEditField gUserEditField = USER_EDIT_TEMPERATURE;
+ProgramConfig gUserProgram = {1210U, 15U, 0U};
+uint8_t gUserBlinkPhase = 0xffU;
+uint8_t gUserDisplayRefresh = 0U;
+uint32_t gUserEditTick = 0U;
+uint8_t gMainCycleActive = 0U;
+MainCyclePhase gMainCyclePhase = MAIN_PHASE_STANDBY;
+ProgramConfig gActiveProgram = {1210U, 15U, 0U};
+uint8_t gActiveProgramChannel = ACTIVE_CHANNEL_USER;
+uint32_t gMainPhaseStartTick = 0U;
+ProgramConfig gLastRunProgram = {1210U, 15U, 0U};
+uint8_t gLastRunProgramChannel = PROGRAM_NONE;
+uint8_t gCycleLedBlinkPhase = 0xffU;
+uint32_t gCycleLedBlinkTick = 0U;
+MainCyclePhase gMainDisplayPhase = MAIN_PHASE_STANDBY;
+uint16_t gMainDisplayValue = 0xffffU;
+BuzzerSequence gBuzzer = {0U, 0U, 0U, 0U, 0U, 0U};
+uint8_t gSafetyErrorActive = 0U;
+StartupSafetyState gStartupSafetyState = STARTUP_SAFETY_CHECK_PT100;
+uint32_t gStartupSafetyStartTick = 0U;
+PID_TypeDef gHoldingPid;
+double gHoldingPidInput = 0.0;
+double gHoldingPidOutput = 0.0;
+double gHoldingPidSetpoint = 121.0;
+uint32_t gHoldingPidWindowStartTick = 0U;
+uint8_t gDryJacketHeaterOn = 0U;
+static uint8_t gTemperatureReadFailCount = 0U;
 
-static const ProgramConfig programPresets[6] = {
-    {1210U, 15U, 0U}, {1210U, 20U, 15U}, {1320U, 7U, 10U},
-    {1340U, 7U, 10U}, {1340U, 10U, 20U}, {1340U, 5U, 5U}};
+static const ProgramConfig programPresets[PROGRAM_COUNT] = {
+  {1210U, 15U, 0U}, {1210U, 20U, 15U}, {1320U, 7U, 10U},
+  {1340U, 7U, 10U}, {1340U, 10U, 20U}, {1340U, 5U, 5U}
+};
 
-static ProgramConfig userConfig = {1210U, 25U, 15U};
-static ProgramConfig activeConfig = {1210U, 25U, 15U};
-static AppMode appMode = APP_MODE_IDLE;
-static UserField selectedUserField = USER_FIELD_TEMP;
-static uint8_t activeProgramIndex = 0xFFU;
-static uint32_t lastDisplaySwapTick = 0U;
-static uint32_t programStartTick = 0U;
-static RunStage runStage = RUN_STAGE_IDLE;
-static uint32_t runStageStartTick = 0U;
-static uint32_t runStageDurationMs = 0U;
-static uint8_t runCompleteLatched = 0U;
-static uint32_t runCompleteTick = 0U;
+static const GpioOutput programLeds[PROGRAM_COUNT] = {
+  {LD_P1_GPIO_Port, LD_P1_Pin}, {LD_P2_GPIO_Port, LD_P2_Pin},
+  {LD_P3_GPIO_Port, LD_P3_Pin}, {LD_P4_GPIO_Port, LD_P4_Pin},
+  {LD_P5_GPIO_Port, LD_P5_Pin}, {LD_P6_GPIO_Port, LD_P6_Pin}
+};
 
-static int16_t pt100TempTenths = 0;
-static uint8_t pt100TemperatureValid = 0U;
-static uint8_t pt100FaultCode = 0U;
-static uint32_t lastPt100SampleTick = 0U;
+static const GpioOutput cycleLeds[7] = {
+  {LD_C1_GPIO_Port, LD_C1_Pin}, {LD_C2_GPIO_Port, LD_C2_Pin},
+  {LD_C3_GPIO_Port, LD_C3_Pin}, {LD_C4_GPIO_Port, LD_C4_Pin},
+  {LD_C5_GPIO_Port, LD_C5_Pin}, {LD_C6_GPIO_Port, LD_C6_Pin},
+  {LD_C7_GPIO_Port, LD_C7_Pin}
+};
 
-static uint8_t buzzerActive = 0U;
-static uint8_t buzzerPhaseIsOn = 0U;
-static uint8_t buzzerPhasesRemaining = 0U;
-static uint32_t buzzerPhaseDurationMs = 0U;
-static uint32_t buzzerPhaseTick = 0U;
-static uint8_t startupWaterReady = 0U;
-static PID_TypeDef heaterPid;
-static double heaterPidInput = 0.0;
-static double heaterPidOutput = 0.0;
-static double heaterPidSetpoint = 0.0;
-static uint32_t heaterPidWindowStartTick = 0U;
-static uint8_t heaterPidReady = 0U;
-static uint32_t heaterPidOnTimeMs = 0U;
-static AppErrorCode appErrorCode = APP_ERROR_NONE;
-static uint8_t runUsesUserConfig = 0U;
-static GPIO_PinState lastPumpCommand = GPIO_PIN_RESET;
-static uint32_t pumpLastOffTick = 0U;
+static const BuzzerPattern buzzerPatterns[BUZZER_EVENT_COUNT] = {
+  [BUZZER_EVENT_OFF] = {0U, 0U, 0U},
+  [BUZZER_EVENT_BUTTON] = {1U, 300U, 150U},
+  [BUZZER_EVENT_READY] = {2U, 300U, 150U},
+  [BUZZER_EVENT_START] = {3U, 500U, 500U},
+  [BUZZER_EVENT_STOP] = {2U, 1000U, 150U},
+  [BUZZER_EVENT_COMPLETE] = {4U, 1000U, 500U},
+  [BUZZER_EVENT_ERROR] = {4U, 500U, 150U}
+};
 
 /* USER CODE END PV */
 
@@ -172,47 +233,1332 @@ static void MX_SPI3_Init(void);
 void MX_USB_HOST_Process(void);
 
 /* USER CODE BEGIN PFP */
-static void App_InitUi(void);
-static void App_UpdateButtons(void);
-static void App_HandleInput(uint32_t now);
-static void App_UpdateDisplay(uint32_t now);
-static void App_UpdateLeds(uint32_t now);
-static void App_StartProgram(uint8_t index, const ProgramConfig *cfg);
-static void App_BeginRun(void);
-static void App_AdjustUserField(int16_t delta);
-static uint8_t App_BlinkState(uint32_t now);
-static void App_DisplayStValue(uint8_t minutes);
-static void App_DisplayDrValue(uint8_t minutes);
-static uint8_t App_EncodeSegmentChar(char c);
-static void App_RequestShortBeep(void);
-static void App_RequestPatternBeep(uint8_t blinks, uint32_t phaseMs);
-static void App_UpdateBuzzer(uint32_t now);
-static void App_UpdateRunState(uint32_t now);
-static void App_MoveToNextRunStage(uint32_t now);
-static void App_ActivateRunStage(RunStage stage, uint32_t now);
-static uint8_t App_IsRunStageTimedOut(uint32_t now);
-static void App_ApplyRunOutputs(uint32_t now);
-static void App_InitPt100(void);
-static void App_UpdatePt100(uint32_t now);
-static void App_DisplayError(TM1637Handle *display, AppErrorCode code);
-static uint8_t App_PreStartChecks(void);
-static uint8_t App_CheckWaterReady(void);
-static uint8_t App_CheckDoorClosed(void);
-static uint8_t App_IsWaterSufficient(void);
-static uint8_t App_CheckPt100Ready(void);
-static GPIO_PinState App_ReadWaterLevelStableState(void);
-static void App_HandleStartupChecks(void);
-static void App_InitHeaterPid(void);
-static void App_PrepareHoldPid(uint32_t now);
-static GPIO_PinState App_ComputeHoldHeaterState(uint32_t now);
-static void App_EmergencyStop(uint8_t isOverTemperature);
-static void App_ResetToInitialIdle(void);
-static void App_RaiseError(AppErrorCode code);
+static void DisplayErrorOnDisplay2(uint8_t code);
+static void ProgramButtons_Init(void);
+static void ProgramButtons_Process(uint32_t now);
+static void Program_Select(uint8_t programIndex, uint32_t now);
+static void ProgramLeds_Set(uint8_t programIndex);
+static void ProgramDisplay_Update(uint32_t now);
+static void DisplayProgramTime(TM1637Handle *display, const char prefix[2], uint16_t minutes);
+static uint8_t Temperature_ReadAndUpdate(uint32_t now);
+static void TemperatureDisplay_Process(uint32_t now);
+static void UserButtons_Init(void);
+static void UserButtons_Process(uint32_t now);
+static void UserMode_Enter(uint32_t now);
+static void UserMode_Exit(void);
+static void UserLed_Update(void);
+static void UserMode_NextField(uint32_t now);
+static void UserMode_Adjust(int16_t delta, uint32_t now);
+static uint16_t ClampUint16(int32_t value, uint16_t minValue, uint16_t maxValue);
+static void UserDisplay_Update(uint32_t now);
+static void UserDisplay_MarkDirty(uint32_t now);
+static void StartButton_Init(void);
+static void StartButton_Process(uint32_t now);
+static void MainCycle_Start(uint32_t now);
+static void MainCycle_Stop(void);
+static void MainCycle_EnableStopExhaust(void);
+static void MainCycle_RecallLastRun(void);
+static void MainCycle_Process(uint32_t now);
+static void MainCycle_SetPhase(MainCyclePhase phase, uint32_t now);
+static void MainCycle_ApplyOutputs(uint32_t now);
+static void MainCycle_UpdateVacuumOutputs(uint32_t elapsed);
+static GPIO_PinState MainCycle_GetAssistJacketHeaterState(uint32_t elapsed);
+static void MainCycle_UpdateHoldingOutputs(uint32_t now);
+static void MainCycle_UpdateExhaustOutputs(uint32_t elapsed);
+static void MainCycle_UpdateDryingOutputs(uint32_t elapsed);
+static void MainCycle_UpdateTemperatureDisplay(uint32_t now);
+static void MainCycleDisplay_Update(uint32_t now);
+static void DisplayCycleChannel(void);
+static void DisplayEndMessage(void);
+static void DisplayReadyMessage(void);
+static void DisplayChannel(uint8_t channel);
+static uint16_t MainCycle_RemainingMinutes(uint32_t elapsed, uint16_t totalMinutes);
+static void MainCycleLeds_Clear(void);
+static void MainCycleLeds_Update(uint32_t now);
+static void MainCycleLed_Set(uint8_t ledIndex, uint8_t on);
+static void MainCycleHoldingLeds_Update(uint32_t elapsed, uint8_t blinkOn);
+static uint8_t MainCycle_ReadTemperatureOrFail(uint32_t now);
+static uint8_t DoorSwitch_IsClosed(void);
+static uint8_t MainCycle_CheckDoorOrFail(void);
+static void StartupSafety_Init(uint32_t now);
+static void StartupSafety_Process(uint32_t now);
+static uint8_t StartupSafety_IsReady(void);
+static void StartupSafety_SetReady(void);
+static uint8_t StartupSafety_CheckPt100(void);
+static uint8_t MainCycle_CheckStartConditions(uint32_t now);
+static uint8_t WaterSensor_HasWater(void);
+static void WaterLeds_Update(void);
+static void SafetyOutputs_Stop(void);
+static void SafetyError_Set(uint8_t code);
+static void SafetyError_Clear(void);
+static void Buzzer_Play(BuzzerEvent event);
+static void Buzzer_Process(uint32_t now);
+static void Buzzer_Set(uint8_t on);
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+static void DisplayErrorOnDisplay2(uint8_t code)
+{
+  /* E r 0 <code> => Er01..Er09. */
+  uint8_t segments[4] = {0x79U, 0x50U, 0x3fU, 0x00U};
+  static const uint8_t digitMap[10] = {0x3fU, 0x06U, 0x5bU, 0x4fU, 0x66U, 0x6dU, 0x7dU, 0x07U, 0x7fU, 0x6fU};
+  segments[2] = digitMap[(code / 10U) % 10U];
+  segments[3] = digitMap[code % 10U];
+  tm1637DisplaySegments(&gDisplay2, segments);
+}
+
+static uint8_t SegmentForCharacter(char character)
+{
+  switch (character) {
+    case '0': return 0x3fU;
+    case '1': return 0x06U;
+    case '2': return 0x5bU;
+    case '3': return 0x4fU;
+    case '4': return 0x66U;
+    case '5': return 0x6dU;
+    case '6': return 0x7dU;
+    case '7': return 0x07U;
+    case '8': return 0x7fU;
+    case '9': return 0x6fU;
+    case 'C': return 0x39U;
+    case 'D': return 0x5eU;
+    case 'E': return 0x79U;
+    case 'H': return 0x76U;
+    case 'S': return 0x6dU;
+    case 'U': return 0x3eU;
+    case 'd': return 0x5eU;
+    case 'n': return 0x54U;
+    case 'r': return 0x50U;
+    case 't': return 0x78U;
+    case 'y': return 0x6eU;
+    default: return 0x00U;
+  }
+}
+
+static void ProgramButtons_Init(void)
+{
+  ButtonInput_Init(&gProgramButtons[0], B_P1_GPIO_Port, B_P1_Pin, GPIO_PIN_SET);
+  ButtonInput_Init(&gProgramButtons[1], B_P2_GPIO_Port, B_P2_Pin, GPIO_PIN_SET);
+  ButtonInput_Init(&gProgramButtons[2], B_P3_GPIO_Port, B_P3_Pin, GPIO_PIN_SET);
+  ButtonInput_Init(&gProgramButtons[3], B_P4_GPIO_Port, B_P4_Pin, GPIO_PIN_SET);
+  ButtonInput_Init(&gProgramButtons[4], B_P5_GPIO_Port, B_P5_Pin, GPIO_PIN_SET);
+  ButtonInput_Init(&gProgramButtons[5], B_P6_GPIO_Port, B_P6_Pin, GPIO_PIN_SET);
+}
+
+static void ProgramButtons_Process(uint32_t now)
+{
+  for (uint8_t i = 0U; i < PROGRAM_COUNT; ++i) {
+    ButtonInput_Update(&gProgramButtons[i], now, PROGRAM_DEBOUNCE_MS, PROGRAM_LONG_PRESS_MS, PROGRAM_REPEAT_MS);
+    if (StartupSafety_IsReady() == 0U || gMainCycleActive != 0U || gSafetyErrorActive != 0U) {
+      (void)ButtonInput_ConsumePressed(&gProgramButtons[i]);
+    }
+    else if (ButtonInput_ConsumePressed(&gProgramButtons[i]) != 0U) {
+      Program_Select(i, now);
+      Buzzer_Play(BUZZER_EVENT_BUTTON);
+    }
+  }
+}
+
+static void Program_Select(uint8_t programIndex, uint32_t now)
+{
+  if (programIndex >= PROGRAM_COUNT || gMainCycleActive != 0U) {
+    return;
+  }
+
+  UserMode_Exit();
+  gSelectedProgram = programIndex;
+  gProgramSelectedTick = now;
+  gProgramTimeDisplayPhase = 0xffU;
+  ProgramLeds_Set(programIndex);
+  ProgramDisplay_Update(now);
+  tm1637DisplayDecimalTenths(&gDisplay2, programPresets[programIndex].temperatureTenthsC);
+}
+
+static void ProgramLeds_Set(uint8_t programIndex)
+{
+  for (uint8_t i = 0U; i < PROGRAM_COUNT; ++i) {
+    HAL_GPIO_WritePin(programLeds[i].port, programLeds[i].pin, GPIO_PIN_RESET);
+  }
+
+  if (programIndex < PROGRAM_COUNT) {
+    HAL_GPIO_WritePin(programLeds[programIndex].port, programLeds[programIndex].pin, GPIO_PIN_SET);
+  }
+}
+
+static void ProgramDisplay_Update(uint32_t now)
+{
+  uint8_t phase;
+  const ProgramConfig *program;
+
+  if (gMainCycleActive != 0U || gUserModeActive != 0U || gSelectedProgram >= PROGRAM_COUNT) {
+    return;
+  }
+
+  phase = (uint8_t)(((now - gProgramSelectedTick) / PROGRAM_TIME_ALTERNATE_MS) & 0x01U);
+  if (phase == gProgramTimeDisplayPhase) {
+    return;
+  }
+
+  gProgramTimeDisplayPhase = phase;
+  program = &programPresets[gSelectedProgram];
+
+  if (phase == 0U) {
+    DisplayProgramTime(&gDisplay1, "St", program->sterilizeMinutes);
+  }
+  else {
+    DisplayProgramTime(&gDisplay1, "Dr", program->dryMinutes);
+  }
+}
+
+static void DisplayProgramTime(TM1637Handle *display, const char prefix[2], uint16_t minutes)
+{
+  uint8_t segments[4];
+
+  if (minutes > 99U) {
+    minutes = 99U;
+  }
+
+  segments[0] = SegmentForCharacter(prefix[0]);
+  segments[1] = SegmentForCharacter(prefix[1]) | (1U << 7);
+  segments[2] = SegmentForCharacter((char)('0' + ((minutes / 10U) % 10U)));
+  segments[3] = SegmentForCharacter((char)('0' + (minutes % 10U)));
+  tm1637DisplaySegments(display, segments);
+}
+
+/* Read temperature once per TEMPERATURE_REFRESH_MS. Returns 1 if a fresh
+ * reading was taken, 0 if still within the throttle window. All call sites
+ * share this single SPI transaction — no double-read per loop. */
+static uint8_t Temperature_ReadAndUpdate(uint32_t now)
+{
+  if ((now - gLastTemperatureReadTick) < TEMPERATURE_REFRESH_MS) {
+    return 0U;
+  }
+  gLastTemperatureReadTick = now;
+  if (gSensorReady == 0U) {
+    return 0U;
+  }
+  return Max31865_ReadTemperatureTenthsC(&gMax31865, &gTemperatureTenthsC);
+}
+
+static void TemperatureDisplay_Process(uint32_t now)
+{
+  uint8_t freshRead;
+
+  if (gUserModeActive != 0U) {
+    return;
+  }
+
+  if (gMainCycleActive != 0U) {
+    /* During a cycle, MainCycle_Process already called Temperature_ReadAndUpdate()
+     * this tick via MainCycle_ReadTemperatureOrFail(). gTemperatureTenthsC is
+     * already up-to-date — just write it to the display every tick. */
+    if (gSensorReady != 0U) {
+      tm1637DisplayDecimalTenths(&gDisplay2, gTemperatureTenthsC);
+    }
+    return;
+  }
+
+  /* Outside a cycle: read from sensor with throttle. */
+  freshRead = Temperature_ReadAndUpdate(now);
+
+  if (freshRead == 0U || gSelectedProgram != PROGRAM_NONE) {
+    return;
+  }
+
+  if (gSensorReady != 0U) {
+    tm1637DisplayDecimalTenths(&gDisplay2, gTemperatureTenthsC);
+  }
+  else {
+    DisplayErrorOnDisplay2(Max31865_ReadFault(&gMax31865, MAX31865_FAULT_NONE));
+  }
+}
+
+static void UserButtons_Init(void)
+{
+  ButtonInput_Init(&gUserButton, B_User_GPIO_Port, B_User_Pin, GPIO_PIN_SET);
+  ButtonInput_Init(&gSetButton, B_Set_GPIO_Port, B_Set_Pin, GPIO_PIN_SET);
+  ButtonInput_Init(&gUpButton, B_Up_GPIO_Port, B_Up_Pin, GPIO_PIN_SET);
+  ButtonInput_Init(&gDownButton, B_Down_GPIO_Port, B_Down_Pin, GPIO_PIN_SET);
+}
+
+static void StartButton_Init(void)
+{
+  ButtonInput_Init(&gStartButton, B_Start_GPIO_Port, B_Start_Pin, GPIO_PIN_SET);
+}
+
+static void UserButtons_Process(uint32_t now)
+{
+  ButtonInput_Update(&gUserButton, now, PROGRAM_DEBOUNCE_MS, PROGRAM_LONG_PRESS_MS, PROGRAM_REPEAT_MS);
+  ButtonInput_Update(&gSetButton, now, PROGRAM_DEBOUNCE_MS, PROGRAM_LONG_PRESS_MS, PROGRAM_REPEAT_MS);
+  ButtonInput_Update(&gUpButton, now, PROGRAM_DEBOUNCE_MS, PROGRAM_LONG_PRESS_MS, PROGRAM_REPEAT_MS);
+  ButtonInput_Update(&gDownButton, now, PROGRAM_DEBOUNCE_MS, PROGRAM_LONG_PRESS_MS, PROGRAM_REPEAT_MS);
+
+  if (StartupSafety_IsReady() == 0U || gMainCycleActive != 0U || gSafetyErrorActive != 0U) {
+    (void)ButtonInput_ConsumePressed(&gUserButton);
+    (void)ButtonInput_ConsumePressed(&gSetButton);
+    (void)ButtonInput_ConsumePressed(&gUpButton);
+    (void)ButtonInput_ConsumeRepeat(&gUpButton);
+    (void)ButtonInput_ConsumePressed(&gDownButton);
+    (void)ButtonInput_ConsumeRepeat(&gDownButton);
+    return;
+  }
+
+  if (ButtonInput_ConsumePressed(&gUserButton) != 0U) {
+    if (gMainCycleActive == 0U) {
+      UserMode_Enter(now);
+    }
+    Buzzer_Play(BUZZER_EVENT_BUTTON);
+  }
+
+  if (gUserModeActive == 0U) {
+    (void)ButtonInput_ConsumePressed(&gSetButton);
+    (void)ButtonInput_ConsumePressed(&gUpButton);
+    (void)ButtonInput_ConsumeRepeat(&gUpButton);
+    (void)ButtonInput_ConsumePressed(&gDownButton);
+    (void)ButtonInput_ConsumeRepeat(&gDownButton);
+    return;
+  }
+
+  if (ButtonInput_ConsumePressed(&gSetButton) != 0U) {
+    UserMode_NextField(now);
+    Buzzer_Play(BUZZER_EVENT_BUTTON);
+  }
+
+  if (ButtonInput_ConsumePressed(&gUpButton) != 0U) {
+    UserMode_Adjust(1, now);
+  }
+  if (ButtonInput_ConsumeRepeat(&gUpButton) != 0U) {
+    UserMode_Adjust(10, now);
+  }
+
+  if (ButtonInput_ConsumePressed(&gDownButton) != 0U) {
+    UserMode_Adjust(-1, now);
+  }
+  if (ButtonInput_ConsumeRepeat(&gDownButton) != 0U) {
+    UserMode_Adjust(-10, now);
+  }
+}
+
+static void UserMode_Enter(uint32_t now)
+{
+  if (gMainCycleActive != 0U) {
+    return;
+  }
+
+  gUserModeActive = 1U;
+  gSelectedProgram = PROGRAM_NONE;
+  gUserEditField = USER_EDIT_TEMPERATURE;
+  ProgramLeds_Set(PROGRAM_NONE);
+  UserLed_Update();
+  UserDisplay_MarkDirty(now);
+}
+
+static void UserMode_Exit(void)
+{
+  gUserModeActive = 0U;
+  UserLed_Update();
+}
+
+static void UserLed_Update(void)
+{
+  HAL_GPIO_WritePin(LD_User_GPIO_Port, LD_User_Pin,
+                    (gUserModeActive != 0U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+}
+
+static void UserMode_NextField(uint32_t now)
+{
+  if (gUserEditField == USER_EDIT_TEMPERATURE) {
+    gUserEditField = USER_EDIT_STERILIZE;
+  }
+  else if (gUserEditField == USER_EDIT_STERILIZE) {
+    gUserEditField = USER_EDIT_DRY;
+  }
+  else {
+    gUserEditField = USER_EDIT_TEMPERATURE;
+  }
+
+  UserDisplay_MarkDirty(now);
+}
+
+static void UserMode_Adjust(int16_t delta, uint32_t now)
+{
+  if (gUserEditField == USER_EDIT_TEMPERATURE) {
+    int16_t step = (delta > 0) ? USER_TEMPERATURE_STEP_TENTHS : (int16_t)-USER_TEMPERATURE_STEP_TENTHS;
+    if (delta >= 10) {
+      step = USER_TEMPERATURE_FAST_STEP_TENTHS;
+    }
+    else if (delta <= -10) {
+      step = (int16_t)-USER_TEMPERATURE_FAST_STEP_TENTHS;
+    }
+    gUserProgram.temperatureTenthsC = ClampUint16((int32_t)gUserProgram.temperatureTenthsC + step,
+                                                  USER_TEMPERATURE_MIN_TENTHS,
+                                                  USER_TEMPERATURE_MAX_TENTHS);
+  }
+  else if (gUserEditField == USER_EDIT_STERILIZE) {
+    int16_t step = (delta > 0) ? USER_TIME_STEP_MINUTES : (int16_t)-USER_TIME_STEP_MINUTES;
+    if (delta >= 10) {
+      step = USER_TIME_FAST_STEP_MINUTES;
+    }
+    else if (delta <= -10) {
+      step = (int16_t)-USER_TIME_FAST_STEP_MINUTES;
+    }
+    gUserProgram.sterilizeMinutes = ClampUint16((int32_t)gUserProgram.sterilizeMinutes + step,
+                                                USER_TIME_MIN_MINUTES,
+                                                USER_TIME_MAX_MINUTES);
+  }
+  else {
+    int16_t step = (delta > 0) ? USER_TIME_STEP_MINUTES : (int16_t)-USER_TIME_STEP_MINUTES;
+    if (delta >= 10) {
+      step = USER_TIME_FAST_STEP_MINUTES;
+    }
+    else if (delta <= -10) {
+      step = (int16_t)-USER_TIME_FAST_STEP_MINUTES;
+    }
+    gUserProgram.dryMinutes = ClampUint16((int32_t)gUserProgram.dryMinutes + step,
+                                          USER_TIME_MIN_MINUTES,
+                                          USER_TIME_MAX_MINUTES);
+  }
+
+  UserDisplay_MarkDirty(now);
+}
+
+static uint16_t ClampUint16(int32_t value, uint16_t minValue, uint16_t maxValue)
+{
+  if (value < (int32_t)minValue) {
+    return minValue;
+  }
+  if (value > (int32_t)maxValue) {
+    return maxValue;
+  }
+  return (uint16_t)value;
+}
+
+static void UserDisplay_Update(uint32_t now)
+{
+  uint8_t blinkPhase;
+  uint8_t blinkOn;
+
+  if (gMainCycleActive != 0U || gUserModeActive == 0U) {
+    return;
+  }
+
+  blinkPhase = (uint8_t)(((now - gUserEditTick) / USER_BLINK_MS) & 0x01U);
+  if (blinkPhase == gUserBlinkPhase && gUserDisplayRefresh == 0U) {
+    return;
+  }
+
+  gUserBlinkPhase = blinkPhase;
+  gUserDisplayRefresh = 0U;
+  blinkOn = (blinkPhase == 0U) ? 1U : 0U;
+
+  if (gUserEditField == USER_EDIT_TEMPERATURE) {
+    DisplayProgramTime(&gDisplay1, "St", gUserProgram.sterilizeMinutes);
+    if (blinkOn != 0U) {
+      tm1637DisplayDecimalTenths(&gDisplay2, gUserProgram.temperatureTenthsC);
+    }
+    else {
+      tm1637Clear(&gDisplay2);
+    }
+  }
+  else if (gUserEditField == USER_EDIT_STERILIZE) {
+    tm1637DisplayDecimalTenths(&gDisplay2, gUserProgram.temperatureTenthsC);
+    if (blinkOn != 0U) {
+      DisplayProgramTime(&gDisplay1, "St", gUserProgram.sterilizeMinutes);
+    }
+    else {
+      tm1637Clear(&gDisplay1);
+    }
+  }
+  else {
+    tm1637DisplayDecimalTenths(&gDisplay2, gUserProgram.temperatureTenthsC);
+    if (blinkOn != 0U) {
+      DisplayProgramTime(&gDisplay1, "Dr", gUserProgram.dryMinutes);
+    }
+    else {
+      tm1637Clear(&gDisplay1);
+    }
+  }
+}
+
+static void UserDisplay_MarkDirty(uint32_t now)
+{
+  gUserBlinkPhase = 0xffU;
+  gUserDisplayRefresh = 1U;
+  gUserEditTick = now;
+  UserDisplay_Update(now);
+}
+
+static void StartButton_Process(uint32_t now)
+{
+  ButtonInput_Update(&gStartButton, now, PROGRAM_DEBOUNCE_MS, PROGRAM_LONG_PRESS_MS, PROGRAM_REPEAT_MS);
+  if (ButtonInput_ConsumePressed(&gStartButton) == 0U) {
+    return;
+  }
+
+  if (StartupSafety_IsReady() == 0U) {
+      return;
+  }
+
+  if (gSafetyErrorActive != 0U) {
+    SafetyError_Clear();
+    MainCycle_Stop();
+    gLastTemperatureReadTick = now - TEMPERATURE_REFRESH_MS;
+    Buzzer_Play(BUZZER_EVENT_BUTTON);
+    return;
+  }
+
+  if (gMainCycleActive != 0U) {
+	uint8_t completed = (gMainCyclePhase == MAIN_PHASE_DONE) ? 1U : 0U;
+    MainCycle_Stop();
+    if (completed != 0U) {
+      MainCycle_RecallLastRun();
+    }
+    else {
+      MainCycle_EnableStopExhaust();
+    }
+    Buzzer_Play(BUZZER_EVENT_STOP);
+  }
+  else {
+    MainCycle_Start(now);
+  }
+}
+
+static void MainCycle_Start(uint32_t now)
+{
+  if (gUserModeActive != 0U) {
+    gActiveProgram = gUserProgram;
+	gActiveProgramChannel = ACTIVE_CHANNEL_USER;
+  }
+  else if (gSelectedProgram < PROGRAM_COUNT) {
+	gActiveProgram = programPresets[gSelectedProgram];
+	gActiveProgramChannel = (uint8_t)(gSelectedProgram + 1U);
+  }
+  else if (gLastRunProgramChannel != PROGRAM_NONE) {
+	gActiveProgram = gLastRunProgram;
+	gActiveProgramChannel = gLastRunProgramChannel;
+  }
+  else {
+    gActiveProgram = gUserProgram;
+    gActiveProgramChannel = ACTIVE_CHANNEL_USER;
+  }
+
+  SafetyError_Clear();
+    if (MainCycle_CheckStartConditions(now) == 0U) {
+      return;
+   }
+
+  gMainCycleActive = 1U;
+  UserMode_Exit();
+  HAL_GPIO_WritePin(LD_Start_GPIO_Port, LD_Start_Pin, GPIO_PIN_SET);
+  tm1637Clear(&gDisplay1);
+  gCycleLedBlinkPhase = 0xffU;
+  gMainDisplayPhase = MAIN_PHASE_STANDBY;
+  gMainDisplayValue = 0xffffU;
+  gLastTemperatureReadTick = now - TEMPERATURE_REFRESH_MS;
+
+  MainCycle_SetPhase(MAIN_PHASE_VACUUM, now);
+
+  MainCycle_UpdateTemperatureDisplay(now);
+  MainCycleDisplay_Update(now);
+  MainCycleLeds_Update(now);
+  Buzzer_Play(BUZZER_EVENT_START);
+}
+
+static void MainCycle_Stop(void)
+{
+  gMainCycleActive = 0U;
+  gMainCyclePhase = MAIN_PHASE_STANDBY;
+  gSelectedProgram = PROGRAM_NONE;
+  gActiveProgramChannel = ACTIVE_CHANNEL_USER;
+  gProgramTimeDisplayPhase = 0xffU;
+  gMainDisplayPhase = MAIN_PHASE_STANDBY;
+  gMainDisplayValue = 0xffffU;
+  UserMode_Exit();
+  SafetyOutputs_Stop();
+  ProgramLeds_Set(PROGRAM_NONE);
+  MainCycleLeds_Clear();
+  gCycleLedBlinkPhase = 0xffU;
+  HAL_GPIO_WritePin(LD_Start_GPIO_Port, LD_Start_Pin, GPIO_PIN_RESET);
+  tm1637Clear(&gDisplay1);
+  tm1637Clear(&gDisplay2);
+}
+
+static void MainCycle_EnableStopExhaust(void)
+{
+  HAL_GPIO_WritePin(Relay_Valve3_GPIO_Port, Relay_Valve3_Pin, GPIO_PIN_SET);
+}
+
+static void MainCycle_RecallLastRun(void)
+{
+  if (gLastRunProgramChannel == PROGRAM_NONE) {
+    return;
+  }
+
+  gActiveProgram = gLastRunProgram;
+  gActiveProgramChannel = gLastRunProgramChannel;
+  gMainDisplayPhase = MAIN_PHASE_STANDBY;
+  gMainDisplayValue = 0xffffU;
+  DisplayCycleChannel();
+}
+
+static void MainCycle_Process(uint32_t now)
+{
+  uint32_t elapsed;
+
+  if (gMainCycleActive == 0U) {
+    return;
+  }
+
+  if (gMainCyclePhase != MAIN_PHASE_DONE && MainCycle_CheckDoorOrFail() == 0U) {
+     return;
+   }
+
+  if (gMainCyclePhase != MAIN_PHASE_DONE) {
+	  if (MainCycle_ReadTemperatureOrFail(now) == 0U) {
+       return;
+     }
+     if (gTemperatureTenthsC >= 0 && (uint16_t)gTemperatureTenthsC > MAIN_OVER_TEMPERATURE_TENTHS) {
+       SafetyError_Set(5U);
+       return;
+     }
+   }
+
+  elapsed = now - gMainPhaseStartTick;
+
+  switch (gMainCyclePhase) {
+    case MAIN_PHASE_VACUUM:
+      if (elapsed >= MAIN_VACUUM_MS) {
+        MainCycle_SetPhase(MAIN_PHASE_HEATING, now);
+        return;
+      }
+      break;
+
+    case MAIN_PHASE_HEATING:
+      if (elapsed >= HEATING_TIMEOUT_MS) {
+    	SafetyError_Set(4U);
+    	return;
+      }
+        else if (gTemperatureTenthsC >= 0 && (uint16_t)gTemperatureTenthsC >= gActiveProgram.temperatureTenthsC) {
+        MainCycle_SetPhase(MAIN_PHASE_HOLDING, now);
+        return;
+      }
+      break;
+
+    case MAIN_PHASE_HOLDING:
+      if (elapsed >= ((uint32_t)gActiveProgram.sterilizeMinutes * MINUTE_MS)) {
+        MainCycle_SetPhase(MAIN_PHASE_EXHAUST, now);
+        return;
+      }
+      break;
+
+    case MAIN_PHASE_EXHAUST:
+      if (elapsed >= MAIN_EXHAUST_MS) {
+        MainCycle_SetPhase(MAIN_PHASE_DRYING, now);
+        return;
+      }
+      break;
+
+    case MAIN_PHASE_DRYING:
+      if (elapsed >= ((uint32_t)gActiveProgram.dryMinutes * MINUTE_MS)) {
+        gLastRunProgram = gActiveProgram;
+        gLastRunProgramChannel = gActiveProgramChannel;
+        MainCycle_SetPhase(MAIN_PHASE_DONE, now);
+        Buzzer_Play(BUZZER_EVENT_COMPLETE);
+        return;
+      }
+      break;
+
+    case MAIN_PHASE_DONE:
+      break;
+
+    default:
+      MainCycle_Stop();
+      return;
+  }
+
+  MainCycle_ApplyOutputs(now);
+}
+
+static void MainCycle_SetPhase(MainCyclePhase phase, uint32_t now)
+{
+  gTemperatureReadFailCount = 0U;
+  gMainCyclePhase = phase;
+  gMainPhaseStartTick = now;
+  gCycleLedBlinkPhase = 0xffU;
+  gCycleLedBlinkTick = now;
+  gMainDisplayPhase = MAIN_PHASE_STANDBY;
+  gMainDisplayValue = 0xffffU;
+  if (phase == MAIN_PHASE_HOLDING) {
+      gHoldingPidInput = (double)gTemperatureTenthsC / 10.0;
+      gHoldingPidOutput = MAIN_HOLD_PID_INITIAL_OUTPUT;
+      gHoldingPidSetpoint = (double)gActiveProgram.temperatureTenthsC / 10.0;
+      PID2(&gHoldingPid, &gHoldingPidInput, &gHoldingPidOutput, &gHoldingPidSetpoint,
+    		  MAIN_HOLD_PID_KP, MAIN_HOLD_PID_KI, MAIN_HOLD_PID_KD, _PID_CD_DIRECT);
+      PID_SetOutputLimits(&gHoldingPid, 0.0, 255.0);
+      PID_SetSampleTime(&gHoldingPid, MAIN_HOLD_PID_SAMPLE_MS);
+      PID_SetMode(&gHoldingPid, _PID_MODE_AUTOMATIC);
+      gHoldingPidWindowStartTick = now;
+    }
+    else {
+      PID_SetMode(&gHoldingPid, _PID_MODE_MANUAL);
+      HAL_GPIO_WritePin(SSR_Heater_GPIO_Port, SSR_Heater_Pin, GPIO_PIN_RESET);
+    }
+
+    if (phase == MAIN_PHASE_DRYING) {
+      gDryJacketHeaterOn = 0U;
+    }
+
+  MainCycle_ApplyOutputs(now);
+}
+
+static void MainCycle_ApplyOutputs(uint32_t now)
+{
+    uint32_t elapsed = now - gMainPhaseStartTick;
+
+    switch (gMainCyclePhase) {
+      case MAIN_PHASE_VACUUM:
+        MainCycle_UpdateVacuumOutputs(elapsed);
+        break;
+
+      case MAIN_PHASE_HEATING:
+        HAL_GPIO_WritePin(SSR_Heater_GPIO_Port, SSR_Heater_Pin, GPIO_PIN_SET);
+        HAL_GPIO_WritePin(SSR_HResistor_GPIO_Port, SSR_HResistor_Pin, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(Relay_Pump_GPIO_Port, Relay_Pump_Pin, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(Relay_Valve1_GPIO_Port, Relay_Valve1_Pin, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(Relay_Valve2_GPIO_Port, Relay_Valve2_Pin, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(Relay_Valve3_GPIO_Port, Relay_Valve3_Pin, GPIO_PIN_RESET);
+        break;
+
+      case MAIN_PHASE_HOLDING:
+        MainCycle_UpdateHoldingOutputs(now);
+        break;
+
+      case MAIN_PHASE_EXHAUST:
+        MainCycle_UpdateExhaustOutputs(elapsed);
+        break;
+
+      case MAIN_PHASE_DRYING:
+    	  MainCycle_UpdateDryingOutputs(elapsed);
+        break;
+
+      case MAIN_PHASE_DONE:
+      default:
+        SafetyOutputs_Stop();
+        break;
+    }
+  }
+
+static void MainCycle_UpdateVacuumOutputs(uint32_t elapsed)
+{
+  uint8_t subPhase = (uint8_t)(elapsed / MAIN_VACUUM_STEP_MS);
+  uint8_t heaterStep = ((subPhase & 0x01U) != 0U) ? 1U : 0U;
+
+  HAL_GPIO_WritePin(SSR_HResistor_GPIO_Port, SSR_HResistor_Pin,
+                        (heaterStep == 0U) ? MainCycle_GetAssistJacketHeaterState(elapsed) : GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(Relay_Valve1_GPIO_Port, Relay_Valve1_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(Relay_Valve3_GPIO_Port, Relay_Valve3_Pin, GPIO_PIN_RESET);
+
+  if (heaterStep != 0U) {
+    HAL_GPIO_WritePin(SSR_Heater_GPIO_Port, SSR_Heater_Pin, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(Relay_Pump_GPIO_Port, Relay_Pump_Pin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(Relay_Valve2_GPIO_Port, Relay_Valve2_Pin, GPIO_PIN_RESET);
+  }
+  else {
+    HAL_GPIO_WritePin(SSR_Heater_GPIO_Port, SSR_Heater_Pin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(Relay_Pump_GPIO_Port, Relay_Pump_Pin, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(Relay_Valve2_GPIO_Port, Relay_Valve2_Pin, GPIO_PIN_SET);
+  }
+}
+
+static GPIO_PinState MainCycle_GetAssistJacketHeaterState(uint32_t elapsed)
+ {
+   const uint32_t cycleMs = MAIN_ASSIST_JACKET_HEATER_ON_MS + MAIN_ASSIST_JACKET_HEATER_OFF_MS;
+   uint16_t cutoffTemperatureTenthsC = 0U;
+
+   if (gActiveProgram.temperatureTenthsC > MAIN_ASSIST_JACKET_HEATER_CUTOFF_TENTHS) {
+     cutoffTemperatureTenthsC = gActiveProgram.temperatureTenthsC - MAIN_ASSIST_JACKET_HEATER_CUTOFF_TENTHS;
+   }
+
+   if (gTemperatureTenthsC >= 0 && (uint16_t)gTemperatureTenthsC >= cutoffTemperatureTenthsC) {
+     return GPIO_PIN_RESET;
+   }
+
+   if (cycleMs == 0U) {
+     return GPIO_PIN_RESET;
+   }
+
+   return ((elapsed % cycleMs) < MAIN_ASSIST_JACKET_HEATER_ON_MS) ? GPIO_PIN_SET : GPIO_PIN_RESET;
+ }
+
+static void MainCycle_UpdateHoldingOutputs(uint32_t now)
+{
+  uint32_t onMs;
+
+  gHoldingPidInput = (double)gTemperatureTenthsC / 10.0;
+  gHoldingPidSetpoint = (double)gActiveProgram.temperatureTenthsC / 10.0;
+  (void)PID_Compute(&gHoldingPid);
+
+  if ((now - gHoldingPidWindowStartTick) >= MAIN_HOLD_PID_WINDOW_MS) {
+    gHoldingPidWindowStartTick += MAIN_HOLD_PID_WINDOW_MS;
+    if ((now - gHoldingPidWindowStartTick) >= MAIN_HOLD_PID_WINDOW_MS) {
+      gHoldingPidWindowStartTick = now;
+    }
+  }
+
+  onMs = (uint32_t)((gHoldingPidOutput * (double)MAIN_HOLD_PID_WINDOW_MS) / 255.0);
+  HAL_GPIO_WritePin(SSR_Heater_GPIO_Port, SSR_Heater_Pin,
+                    ((now - gHoldingPidWindowStartTick) < onMs) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(SSR_HResistor_GPIO_Port, SSR_HResistor_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(Relay_Pump_GPIO_Port, Relay_Pump_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(Relay_Valve1_GPIO_Port, Relay_Valve1_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(Relay_Valve2_GPIO_Port, Relay_Valve2_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(Relay_Valve3_GPIO_Port, Relay_Valve3_Pin, GPIO_PIN_RESET);
+}
+
+static void MainCycle_UpdateExhaustOutputs(uint32_t elapsed)
+{
+  HAL_GPIO_WritePin(SSR_Heater_GPIO_Port, SSR_Heater_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(SSR_HResistor_GPIO_Port, SSR_HResistor_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(Relay_Valve1_GPIO_Port, Relay_Valve1_Pin, GPIO_PIN_RESET);
+
+  if (elapsed < MAIN_EXHAUST_DRAIN_MS) {
+    HAL_GPIO_WritePin(Relay_Valve3_GPIO_Port, Relay_Valve3_Pin, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(Relay_Pump_GPIO_Port, Relay_Pump_Pin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(Relay_Valve2_GPIO_Port, Relay_Valve2_Pin, GPIO_PIN_RESET);
+  }
+  else {
+    HAL_GPIO_WritePin(Relay_Valve3_GPIO_Port, Relay_Valve3_Pin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(Relay_Pump_GPIO_Port, Relay_Pump_Pin, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(Relay_Valve2_GPIO_Port, Relay_Valve2_Pin, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(SSR_HResistor_GPIO_Port, SSR_HResistor_Pin,
+                            MainCycle_GetAssistJacketHeaterState(elapsed - MAIN_EXHAUST_DRAIN_MS));
+  }
+}
+
+static void MainCycle_UpdateDryingOutputs(uint32_t elapsed)
+{
+  HAL_GPIO_WritePin(SSR_Heater_GPIO_Port, SSR_Heater_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(Relay_Valve1_GPIO_Port, Relay_Valve1_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(Relay_Valve3_GPIO_Port, Relay_Valve3_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(Relay_Pump_GPIO_Port, Relay_Pump_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(Relay_Valve2_GPIO_Port, Relay_Valve2_Pin, GPIO_PIN_SET);
+
+  {
+    uint32_t dryTotalMs = (uint32_t)gActiveProgram.dryMinutes * MINUTE_MS;
+    if ((dryTotalMs <= MAIN_DRY_HEATER_CUTOFF_MS) ||
+        (elapsed >= (dryTotalMs - MAIN_DRY_HEATER_CUTOFF_MS))) {
+      gDryJacketHeaterOn = 0U;
+    }
+    else if (gTemperatureTenthsC >= 0) {
+      if ((uint16_t)gTemperatureTenthsC <= MAIN_DRY_TEMPERATURE_LOW_TENTHS) {
+        gDryJacketHeaterOn = 1U;
+      }
+      else if ((uint16_t)gTemperatureTenthsC >= MAIN_DRY_TEMPERATURE_HIGH_TENTHS) {
+        gDryJacketHeaterOn = 0U;
+      }
+    }
+  }
+
+  HAL_GPIO_WritePin(SSR_HResistor_GPIO_Port, SSR_HResistor_Pin,
+                    (gDryJacketHeaterOn != 0U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+}
+
+static void MainCycle_UpdateTemperatureDisplay(uint32_t now)
+{
+  /* Temperature was already read by MainCycle_ReadTemperatureOrFail()
+   * via Temperature_ReadAndUpdate(). No second SPI read needed.
+   * Fault display suppressed here; MainCycle_Process raises Er01 if invalid. */
+  (void)now;
+  if (gSensorReady != 0U) {
+    tm1637DisplayDecimalTenths(&gDisplay2, gTemperatureTenthsC);
+  }
+}
+
+static void MainCycleDisplay_Update(uint32_t now)
+{
+  uint16_t displayValue = 0xffffU;
+  uint32_t elapsed;
+
+  if (gMainCycleActive == 0U) {
+    return;
+  }
+
+  elapsed = now - gMainPhaseStartTick;
+  switch (gMainCyclePhase) {
+    case MAIN_PHASE_VACUUM:
+    case MAIN_PHASE_HEATING:
+    case MAIN_PHASE_EXHAUST:
+      if (gMainDisplayPhase != gMainCyclePhase) {
+        DisplayCycleChannel();
+      }
+      gMainDisplayPhase = gMainCyclePhase;
+      gMainDisplayValue = 0xffffU;
+      break;
+
+    case MAIN_PHASE_HOLDING:
+      displayValue = MainCycle_RemainingMinutes(elapsed, gActiveProgram.sterilizeMinutes);
+      if (gMainDisplayPhase != gMainCyclePhase || displayValue != gMainDisplayValue) {
+        DisplayProgramTime(&gDisplay1, "St", displayValue);
+      }
+      gMainDisplayPhase = gMainCyclePhase;
+      gMainDisplayValue = displayValue;
+      break;
+
+    case MAIN_PHASE_DRYING:
+      displayValue = MainCycle_RemainingMinutes(elapsed, gActiveProgram.dryMinutes);
+      if (gMainDisplayPhase != gMainCyclePhase || displayValue != gMainDisplayValue) {
+        DisplayProgramTime(&gDisplay1, "Dr", displayValue);
+      }
+      gMainDisplayPhase = gMainCyclePhase;
+      gMainDisplayValue = displayValue;
+      break;
+
+    case MAIN_PHASE_DONE:
+      displayValue = (gCycleLedBlinkPhase == 0U) ? 0U : 1U;
+      if (gMainDisplayPhase != gMainCyclePhase || displayValue != gMainDisplayValue) {
+        if (displayValue != 0U) {
+          DisplayEndMessage();
+        }
+        else {
+          tm1637Clear(&gDisplay1);
+        }
+      }
+      gMainDisplayPhase = gMainCyclePhase;
+      gMainDisplayValue = displayValue;
+      break;
+
+    default:
+      if (gMainDisplayPhase != gMainCyclePhase) {
+        tm1637Clear(&gDisplay1);
+      }
+      gMainDisplayPhase = gMainCyclePhase;
+      gMainDisplayValue = 0xffffU;
+      break;
+  }
+}
+
+static void DisplayCycleChannel(void)
+{
+  DisplayChannel(gActiveProgramChannel);
+}
+
+static void DisplayChannel(uint8_t channel)
+{
+  uint8_t segments[4];
+
+  segments[0] = SegmentForCharacter('C');
+  segments[1] = SegmentForCharacter('H') | (1U << 7);
+  if (channel == ACTIVE_CHANNEL_USER) {
+    segments[2] = SegmentForCharacter('U');
+    segments[3] = SegmentForCharacter('S');
+  }
+  else {
+    segments[2] = SegmentForCharacter('0');
+    segments[3] = SegmentForCharacter((char)('0' + (channel  % 10U)));
+  }
+
+  tm1637DisplaySegments(&gDisplay1, segments);
+}
+
+static void DisplayEndMessage(void)
+{
+  uint8_t segments[4];
+
+  segments[0] = 0x00U;
+  segments[1] = SegmentForCharacter('E');
+  segments[2] = SegmentForCharacter('n');
+  segments[3] = SegmentForCharacter('d');
+  tm1637DisplaySegments(&gDisplay1, segments);
+}
+
+static void DisplayReadyMessage(void)
+{
+  uint8_t segments[4];
+
+  segments[0] = SegmentForCharacter('r');
+  segments[1] = SegmentForCharacter('E');
+  segments[2] = SegmentForCharacter('d');
+  segments[3] = SegmentForCharacter('y');
+  tm1637DisplaySegments(&gDisplay1, segments);
+}
+
+static uint16_t MainCycle_RemainingMinutes(uint32_t elapsed, uint16_t totalMinutes)
+{
+  uint32_t totalMs = (uint32_t)totalMinutes * MINUTE_MS;
+  uint32_t remainingMs;
+
+  if (elapsed >= totalMs) {
+    return 0U;
+  }
+
+  remainingMs = totalMs - elapsed;
+  return (uint16_t)((remainingMs + MINUTE_MS - 1U) / MINUTE_MS);
+}
+
+static void MainCycleLeds_Clear(void)
+{
+  for (uint8_t i = 0U; i < 7U; ++i) {
+    MainCycleLed_Set(i, 0U);
+  }
+}
+
+static void MainCycleLeds_Update(uint32_t now)
+{
+  uint8_t blinkOn;
+  uint32_t elapsed;
+
+  if (gMainCycleActive == 0U) {
+    return;
+  }
+
+  if (gCycleLedBlinkPhase == 0xffU || (now - gCycleLedBlinkTick) >= MAIN_CYCLE_LED_BLINK_MS) {
+    if (gCycleLedBlinkPhase == 0xffU) {
+      gCycleLedBlinkPhase = 1U;
+    }
+    else {
+      gCycleLedBlinkPhase ^= 1U;
+    }
+    gCycleLedBlinkTick = now;
+  }
+
+  blinkOn = gCycleLedBlinkPhase;
+  elapsed = now - gMainPhaseStartTick;
+  MainCycleLeds_Clear();
+
+  switch (gMainCyclePhase) {
+    case MAIN_PHASE_VACUUM:
+      MainCycleLed_Set(0U, blinkOn);
+      break;
+
+    case MAIN_PHASE_HEATING:
+      MainCycleLed_Set(0U, 1U);
+      MainCycleLed_Set(1U, blinkOn);
+      break;
+
+    case MAIN_PHASE_HOLDING:
+      MainCycleLed_Set(0U, 1U);
+      MainCycleLed_Set(1U, 1U);
+      MainCycleHoldingLeds_Update(elapsed, blinkOn);
+      break;
+
+    case MAIN_PHASE_EXHAUST:
+      for (uint8_t i = 0U; i < 5U; ++i) {
+        MainCycleLed_Set(i, 1U);
+      }
+      MainCycleLed_Set(5U, blinkOn);
+      break;
+
+    case MAIN_PHASE_DRYING:
+      for (uint8_t i = 0U; i < 6U; ++i) {
+        MainCycleLed_Set(i, 1U);
+      }
+      MainCycleLed_Set(6U, blinkOn);
+      break;
+
+    case MAIN_PHASE_DONE:
+      for (uint8_t i = 0U; i < 7U; ++i) {
+        MainCycleLed_Set(i, blinkOn);
+      }
+      break;
+
+    default:
+      break;
+  }
+}
+
+static void MainCycleLed_Set(uint8_t ledIndex, uint8_t on)
+{
+  if (ledIndex >= 7U) {
+    return;
+  }
+  HAL_GPIO_WritePin(cycleLeds[ledIndex].port, cycleLeds[ledIndex].pin,
+                    (on != 0U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+}
+
+static void MainCycleHoldingLeds_Update(uint32_t elapsed, uint8_t blinkOn)
+{
+  uint32_t holdMs = (uint32_t)gActiveProgram.sterilizeMinutes * MINUTE_MS;
+  uint32_t firstThird;
+  uint32_t secondThird;
+
+  if (holdMs == 0U) {
+    for (uint8_t i = 2U; i <= 4U; ++i) {
+      MainCycleLed_Set(i, 1U);
+    }
+    return;
+  }
+
+  firstThird = holdMs / 3U;
+  secondThird = (holdMs * 2U) / 3U;
+  if (firstThird == 0U) {
+    firstThird = 1U;
+  }
+  if (secondThird <= firstThird) {
+    secondThird = firstThird + 1U;
+  }
+
+  if (elapsed < firstThird) {
+    MainCycleLed_Set(2U, blinkOn);
+  }
+  else if (elapsed < secondThird) {
+    MainCycleLed_Set(2U, 1U);
+    MainCycleLed_Set(3U, blinkOn);
+  }
+  else {
+    MainCycleLed_Set(2U, 1U);
+    MainCycleLed_Set(3U, 1U);
+    MainCycleLed_Set(4U, blinkOn);
+  }
+}
+
+static uint8_t MainCycle_ReadTemperatureOrFail(uint32_t now)
+{
+  uint8_t freshRead = Temperature_ReadAndUpdate(now);
+
+  if (freshRead == 0U) {
+    /* Still within throttle window — reuse last known temperature value. */
+    return 1U;
+  }
+
+  if (gSensorReady == 0U) {
+    gTemperatureReadFailCount++;
+    if (gTemperatureReadFailCount >= TEMPERATURE_READ_FAIL_MAX) {
+      gTemperatureReadFailCount = 0U;
+      SafetyError_Set(1U);
+      return 0U;
+    }
+    /* Transient failure (e.g. relay switching noise) — keep last value. */
+    return 1U;
+  }
+  gTemperatureReadFailCount = 0U;
+  return 1U;
+}
+
+static uint8_t DoorSwitch_IsClosed(void)
+{
+  return (HAL_GPIO_ReadPin(L_Switch_GPIO_Port, L_Switch_Pin) == GPIO_PIN_SET) ? 1U : 0U;
+}
+
+static uint8_t MainCycle_CheckDoorOrFail(void)
+{
+  if (DoorSwitch_IsClosed() == 0U) {
+    SafetyError_Set(3U);
+    return 0U;
+  }
+
+  return 1U;
+}
+
+static void StartupSafety_Init(uint32_t now)
+{
+  gStartupSafetyState = STARTUP_SAFETY_CHECK_PT100;
+  gStartupSafetyStartTick = now;
+  tm1637Clear(&gDisplay1);
+  StartupSafety_Process(now);
+}
+
+static void StartupSafety_Process(uint32_t now)
+{
+  if (gStartupSafetyState == STARTUP_SAFETY_READY || gStartupSafetyState == STARTUP_SAFETY_ERROR) {
+    return;
+  }
+
+  WaterLeds_Update();
+
+  if (gStartupSafetyState == STARTUP_SAFETY_CHECK_PT100) {
+    SafetyOutputs_Stop();
+    if (StartupSafety_CheckPt100() == 0U) {
+      gStartupSafetyState = STARTUP_SAFETY_ERROR;
+      return;
+    }
+
+    if (WaterSensor_HasWater() != 0U) {
+      StartupSafety_SetReady();
+    }
+    else {
+      HAL_GPIO_WritePin(Relay_Valve1_GPIO_Port, Relay_Valve1_Pin, GPIO_PIN_SET);
+      gStartupSafetyState = STARTUP_SAFETY_FILL_WATER;
+      gStartupSafetyStartTick = now;
+    }
+    return;
+  }
+
+  if (WaterSensor_HasWater() != 0U) {
+    StartupSafety_SetReady();
+  }
+  else if ((now - gStartupSafetyStartTick) >= WATER_FILL_TIMEOUT_MS) {
+    SafetyError_Set(2U);
+    gStartupSafetyState = STARTUP_SAFETY_ERROR;
+  }
+  else {
+    HAL_GPIO_WritePin(Relay_Valve1_GPIO_Port, Relay_Valve1_Pin, GPIO_PIN_SET);
+  }
+}
+
+static uint8_t StartupSafety_IsReady(void)
+{
+  return (gStartupSafetyState == STARTUP_SAFETY_READY) ? 1U : 0U;
+}
+
+static void StartupSafety_SetReady(void){
+
+  SafetyOutputs_Stop();
+  WaterLeds_Update();
+  gStartupSafetyState = STARTUP_SAFETY_READY;
+  DisplayReadyMessage();
+  Buzzer_Play(BUZZER_EVENT_READY);
+}
+
+static uint8_t StartupSafety_CheckPt100(void)
+{
+  if (MainCycle_ReadTemperatureOrFail(HAL_GetTick()) == 0U) {
+    return 0U;
+  }
+
+  tm1637DisplayDecimalTenths(&gDisplay2, gTemperatureTenthsC);
+  if (gTemperatureTenthsC >= 0 && (uint16_t)gTemperatureTenthsC > MAIN_OVER_TEMPERATURE_TENTHS) {
+    SafetyError_Set(5U);
+    return 0U;
+  }
+
+  return 1U;
+}
+
+static uint8_t MainCycle_CheckStartConditions(uint32_t now)
+{
+  (void)now;
+
+  SafetyOutputs_Stop();
+
+  if (MainCycle_CheckDoorOrFail() == 0U) {
+    return 0U;
+  }
+
+  return 1U;
+}
+
+static uint8_t WaterSensor_HasWater(void)
+{
+  #if WATER_CHECK_BYPASS_FOR_TEST
+    return 1U;
+  #else
+    return (HAL_GPIO_ReadPin(Water_S_GPIO_Port, Water_S_Pin) == GPIO_PIN_RESET) ? 1U : 0U;
+  #endif
+}
+
+static void WaterLeds_Update(void)
+{
+  if (WaterSensor_HasWater() != 0U) {
+    HAL_GPIO_WritePin(LD_HW_GPIO_Port, LD_HW_Pin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(LD_LW_GPIO_Port, LD_LW_Pin, GPIO_PIN_SET);
+  }
+  else {
+    HAL_GPIO_WritePin(LD_HW_GPIO_Port, LD_HW_Pin, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(LD_LW_GPIO_Port, LD_LW_Pin, GPIO_PIN_RESET);
+  }
+}
+
+static void SafetyOutputs_Stop(void)
+{
+  HAL_GPIO_WritePin(SSR_Heater_GPIO_Port, SSR_Heater_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(SSR_HResistor_GPIO_Port, SSR_HResistor_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(Relay_Pump_GPIO_Port, Relay_Pump_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(Relay_Valve1_GPIO_Port, Relay_Valve1_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(Relay_Valve2_GPIO_Port, Relay_Valve2_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(Relay_Valve3_GPIO_Port, Relay_Valve3_Pin, GPIO_PIN_RESET);
+}
+
+static void SafetyError_Set(uint8_t code)
+{
+  gSafetyErrorActive = 1U;
+  gMainCycleActive = 0U;
+  gMainCyclePhase = MAIN_PHASE_STANDBY;
+  SafetyOutputs_Stop();
+  HAL_GPIO_WritePin(LD_Start_GPIO_Port, LD_Start_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(LD_Alarm_GPIO_Port, LD_Alarm_Pin, GPIO_PIN_SET);
+  DisplayErrorOnDisplay2(code);
+  Buzzer_Play(BUZZER_EVENT_ERROR);
+}
+
+static void SafetyError_Clear(void)
+{
+  gSafetyErrorActive = 0U;
+  HAL_GPIO_WritePin(LD_Alarm_GPIO_Port, LD_Alarm_Pin, GPIO_PIN_RESET);
+  Buzzer_Play(BUZZER_EVENT_OFF);
+}
+
+static void Buzzer_Play(BuzzerEvent event)
+{
+  const BuzzerPattern *pattern;
+
+  if (event == BUZZER_EVENT_OFF) {
+    gBuzzer.remainingPulses = 0U;
+    gBuzzer.active = 0U;
+    gBuzzer.outputOn = 0U;
+    Buzzer_Set(0U);
+    return;
+  }
+
+  if (event >= BUZZER_EVENT_COUNT) {
+     return;
+   }
+
+   if (event == BUZZER_EVENT_ERROR) {
+     gSafetyErrorActive = 1U;
+   }
+   else if (gSafetyErrorActive != 0U) {
+     return;
+   }
+
+   pattern = &buzzerPatterns[event];
+   if (pattern->pulseCount == 0U || pattern->onMs == 0U) {
+    return;
+  }
+
+  gBuzzer.remainingPulses = pattern->pulseCount;
+  gBuzzer.active = 1U;
+  gBuzzer.outputOn = 1U;
+  gBuzzer.onMs = pattern->onMs;
+  gBuzzer.offMs = pattern->offMs;
+  gBuzzer.lastToggleTick = HAL_GetTick();
+  Buzzer_Set(1U);
+}
+
+static void Buzzer_Process(uint32_t now)
+{
+  if (gBuzzer.active == 0U) {
+    Buzzer_Set(0U);
+    return;
+  }
+
+  if (gBuzzer.outputOn != 0U) {
+    if ((now - gBuzzer.lastToggleTick) >= gBuzzer.onMs) {
+      Buzzer_Set(0U);
+      gBuzzer.outputOn = 0U;
+      gBuzzer.lastToggleTick = now;
+      if (gBuzzer.remainingPulses > 0U) {
+        --gBuzzer.remainingPulses;
+      }
+    }
+  }
+  else if ((now - gBuzzer.lastToggleTick) >= gBuzzer.offMs) {
+	    if (gBuzzer.remainingPulses == 0U) {
+	    	gBuzzer.active = 0U;
+    }
+    else {
+      Buzzer_Set(1U);
+      gBuzzer.outputOn = 1U;
+      gBuzzer.lastToggleTick = now;
+    }
+  }
+}
+
+static void Buzzer_Set(uint8_t on)
+{
+  HAL_GPIO_WritePin(Buzzer_GPIO_Port, Buzzer_Pin, (on != 0U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+}
 
 /* USER CODE END 0 */
 
@@ -244,10 +1590,29 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_SPI3_Init();
   MX_USB_HOST_Init();
+  MX_SPI3_Init();
   /* USER CODE BEGIN 2 */
-  App_InitUi();
+  tm1637Init(&gDisplay1, TM1637_DISPLAY_1);
+  tm1637Init(&gDisplay2, TM1637_DISPLAY_2);
+  tm1637SetBrightness(&gDisplay1, 8);
+  tm1637SetBrightness(&gDisplay2, 8);
+  tm1637Clear(&gDisplay1);
+  tm1637Clear(&gDisplay2);
+  ProgramButtons_Init();
+  UserButtons_Init();
+  StartButton_Init();
+  ProgramLeds_Set(PROGRAM_NONE);
+  UserLed_Update();
+  HAL_GPIO_WritePin(LD_Start_GPIO_Port, LD_Start_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(LD_HW_GPIO_Port, LD_HW_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(LD_LW_GPIO_Port, LD_LW_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(LD_Alarm_GPIO_Port, LD_Alarm_Pin, GPIO_PIN_RESET);
+  SafetyOutputs_Stop();
+
+  Max31865_Init(&gMax31865, &hspi3, CS_GPIO_Port, CS_Pin, 430.0f, 100.0f);
+  gSensorReady = Max31865_Begin(&gMax31865, MAX31865_2WIRE, 1U);
+  StartupSafety_Init(HAL_GetTick());
 
   /* USER CODE END 2 */
 
@@ -256,19 +1621,22 @@ int main(void)
   while (1)
   {
     /* USER CODE END WHILE */
-	uint32_t now = HAL_GetTick();
-
-	MX_USB_HOST_Process();
+    MX_USB_HOST_Process();
 
     /* USER CODE BEGIN 3 */
-    App_HandleStartupChecks();
-    App_UpdateButtons();
-    App_HandleInput(now);
-    App_UpdatePt100(now);
-    App_UpdateRunState(now);
-    App_UpdateDisplay(now);
-    App_UpdateLeds(now);
-    App_UpdateBuzzer(now);
+    uint32_t now = HAL_GetTick();
+    StartupSafety_Process(now);
+    StartButton_Process(now);
+    ProgramButtons_Process(now);
+    UserButtons_Process(now);
+    UserLed_Update();
+    ProgramDisplay_Update(now);
+    UserDisplay_Update(now);
+    MainCycle_Process(now);
+    TemperatureDisplay_Process(now);
+    MainCycleDisplay_Update(now);
+    MainCycleLeds_Update(now);
+    Buzzer_Process(now);
   }
   /* USER CODE END 3 */
 }
@@ -319,7 +1687,7 @@ void SystemClock_Config(void)
 }
 
 /**
-  * @brief SPI1 Initialization Function
+  * @brief SPI3 Initialization Function
   * @param None
   * @retval None
   */
@@ -341,8 +1709,7 @@ static void MX_SPI3_Init(void)
   hspi3.Init.CLKPolarity = SPI_POLARITY_LOW;
   hspi3.Init.CLKPhase = SPI_PHASE_2EDGE;
   hspi3.Init.NSS = SPI_NSS_SOFT;
-  /* SPI3 clock = APB1/16 = 42MHz/16 = 2.625MHz, compatible with MAX31865 (SCLK max 5MHz). */
-  hspi3.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16;
+  hspi3.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_128;
   hspi3.Init.FirstBit = SPI_FIRSTBIT_MSB;
   hspi3.Init.TIMode = SPI_TIMODE_DISABLE;
   hspi3.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
@@ -379,51 +1746,44 @@ static void MX_GPIO_Init(void)
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOE, LD_C3_Pin|LD_C4_Pin|LD_C5_Pin|LD_C6_Pin
                           |LD_C7_Pin|LD_Alarm_Pin|LD_LW_Pin|LD_HW_Pin
-                          |SSR_Heater_Pin|SSR_HResistor_Pin|Relay_Valve_1_Pin|Relay_Valve_2_Pin
-                          |Relay_Valve_3_Pin|Relay_Valve_4_Pin|LD_C1_Pin|LD_C2_Pin, GPIO_PIN_RESET);
+                          |SSR_Heater_Pin|SSR_HResistor_Pin|Relay_Valve1_Pin|Relay_Valve2_Pin
+                          |Relay_Valve3_Pin|LD_C1_Pin|LD_C2_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, CS_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(CS_GPIO_Port, CS_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, Buzzer_Pin|Relay_Valve_5_Pin|CLK1_Pin|DIO1_Pin
-                          |CLK2_Pin|DIO2_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, Buzzer_Pin|CLK1_Pin|DIO1_Pin|CLK2_Pin
+                          |DIO2_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOD, Relay_Pump_Pin|LD4_Pin|LD3_Pin|LD5_Pin
-                          |LD6_Pin|LD_P1_Pin|LD_P2_Pin|LD_P3_Pin
+                          |LD6_Pin|LD_P3_Pin|LD_P2_Pin|LD_P1_Pin
                           |LD_P4_Pin|LD_P5_Pin|LD_P6_Pin|LD_Start_Pin
                           |LD_User_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pins : LD_C3_Pin LD_C4_Pin LD_C5_Pin LD_C6_Pin
                            LD_C7_Pin LD_Alarm_Pin LD_LW_Pin LD_HW_Pin
-                           SSR_Heater_Pin SSR_HResistor_Pin Relay_Valve_1_Pin Relay_Valve_2_Pin
-                           Relay_Valve_3_Pin Relay_Valve_4_Pin LD_C1_Pin LD_C2_Pin */
+                           SSR_Heater_Pin SSR_HResistor_Pin Relay_Valve1_Pin Relay_Valve2_Pin
+                           Relay_Valve3_Pin LD_C1_Pin LD_C2_Pin */
   GPIO_InitStruct.Pin = LD_C3_Pin|LD_C4_Pin|LD_C5_Pin|LD_C6_Pin
                           |LD_C7_Pin|LD_Alarm_Pin|LD_LW_Pin|LD_HW_Pin
-                          |SSR_Heater_Pin|SSR_HResistor_Pin|Relay_Valve_1_Pin|Relay_Valve_2_Pin
-                          |Relay_Valve_3_Pin|Relay_Valve_4_Pin|LD_C1_Pin|LD_C2_Pin;
+                          |SSR_Heater_Pin|SSR_HResistor_Pin|Relay_Valve1_Pin|Relay_Valve2_Pin
+                          |Relay_Valve3_Pin|LD_C1_Pin|LD_C2_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
 
   /*Configure GPIO pins : B_P1_Pin B_P2_Pin B_P3_Pin B_P4_Pin
-                             B_P5_Pin B_P6_Pin B_Start_Pin B_Set_Pin
-                             B_Up_Pin B_Down_Pin B_User_Pin */
-    GPIO_InitStruct.Pin = B_P1_Pin|B_P2_Pin|B_P3_Pin|B_P4_Pin
-                            |B_P5_Pin|B_P6_Pin|B_Start_Pin|B_Set_Pin
-                            |B_Up_Pin|B_Down_Pin|B_User_Pin;
-    GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-    GPIO_InitStruct.Pull = GPIO_NOPULL;
-    HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
-
-    /*Configure GPIO pin : Water_Sennor_Pin (PC10)
-      Mức HIGH = thiếu nước, mức LOW = đủ nước */
-    GPIO_InitStruct.Pin = Water_Sennor_Pin;
-    GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-    GPIO_InitStruct.Pull = GPIO_PULLUP;
-    HAL_GPIO_Init(Water_Sennor_GPIO_Port, &GPIO_InitStruct);
+                           B_P5_Pin B_P6_Pin B_Start_Pin B_Set_Pin
+                           B_Up_Pin B_Down_Pin B_User_Pin */
+  GPIO_InitStruct.Pin = B_P1_Pin|B_P2_Pin|B_P3_Pin|B_P4_Pin
+                          |B_P5_Pin|B_P6_Pin|B_Start_Pin|B_Set_Pin
+                          |B_Up_Pin|B_Down_Pin|B_User_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
   /*Configure GPIO pin : B1_Pin */
   GPIO_InitStruct.Pin = B1_Pin;
@@ -431,47 +1791,34 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : DRDY_Pin
-    DRDY là tín hiệu báo dữ liệu sẵn sàng từ MAX31865 nên phải để INPUT. */
-  GPIO_InitStruct.Pin = DRDY_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
   /*Configure GPIO pin : CS_Pin */
   GPIO_InitStruct.Pin = CS_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+  HAL_GPIO_Init(CS_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : BOOT1_Pin */
-  GPIO_InitStruct.Pin = BOOT1_Pin;
+  /*Configure GPIO pins : BOOT1_Pin Water_S_Pin L_Switch_Pin */
+  GPIO_InitStruct.Pin = BOOT1_Pin|Water_S_Pin|L_Switch_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(BOOT1_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : Buzzer_Pin Relay_Valve_5_Pin CLK1_Pin DIO1_Pin
-                           CLK2_Pin DIO2_Pin */
-  GPIO_InitStruct.Pin = Buzzer_Pin|Relay_Valve_5_Pin|CLK1_Pin|DIO1_Pin
-                          |CLK2_Pin|DIO2_Pin;
+  /*Configure GPIO pins : Buzzer_Pin CLK1_Pin DIO1_Pin CLK2_Pin
+                           DIO2_Pin */
+  GPIO_InitStruct.Pin = Buzzer_Pin|CLK1_Pin|DIO1_Pin|CLK2_Pin
+                          |DIO2_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : L_Switch_Pin */
-  GPIO_InitStruct.Pin = L_Switch_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
-  HAL_GPIO_Init(L_Switch_GPIO_Port, &GPIO_InitStruct);
-
   /*Configure GPIO pins : Relay_Pump_Pin LD4_Pin LD3_Pin LD5_Pin
-                           LD6_Pin LD_P1_Pin LD_P2_Pin LD_P3_Pin
+                           LD6_Pin LD_P3_Pin LD_P2_Pin LD_P1_Pin
                            LD_P4_Pin LD_P5_Pin LD_P6_Pin LD_Start_Pin
                            LD_User_Pin */
   GPIO_InitStruct.Pin = Relay_Pump_Pin|LD4_Pin|LD3_Pin|LD5_Pin
-                          |LD6_Pin|LD_P1_Pin|LD_P2_Pin|LD_P3_Pin
+                          |LD6_Pin|LD_P3_Pin|LD_P2_Pin|LD_P1_Pin
                           |LD_P4_Pin|LD_P5_Pin|LD_P6_Pin|LD_Start_Pin
                           |LD_User_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
@@ -484,1067 +1831,6 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-static void App_InitUi(void)
-{
-  tm1637Init(&display1, TM1637_DISPLAY_1);
-  tm1637Init(&display2, TM1637_DISPLAY_2);
-  tm1637SetBrightness(&display1, 8);
-  tm1637SetBrightness(&display2, 8);
-
-  /* Only LD_LW/LD_HW are active-low, keep all status LEDs OFF at idle */
-  HAL_GPIO_WritePin(LD_Alarm_GPIO_Port, LD_Alarm_Pin, GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(LD_LW_GPIO_Port, LD_LW_Pin, GPIO_PIN_SET);
-  HAL_GPIO_WritePin(LD_HW_GPIO_Port, LD_HW_Pin, GPIO_PIN_SET);
-
-  ButtonInput_Init(&programButtons[0], B_P1_GPIO_Port, B_P1_Pin, GPIO_PIN_SET);
-  ButtonInput_Init(&programButtons[1], B_P2_GPIO_Port, B_P2_Pin, GPIO_PIN_SET);
-  ButtonInput_Init(&programButtons[2], B_P3_GPIO_Port, B_P3_Pin, GPIO_PIN_SET);
-  ButtonInput_Init(&programButtons[3], B_P4_GPIO_Port, B_P4_Pin, GPIO_PIN_SET);
-  ButtonInput_Init(&programButtons[4], B_P5_GPIO_Port, B_P5_Pin, GPIO_PIN_SET);
-  ButtonInput_Init(&programButtons[5], B_P6_GPIO_Port, B_P6_Pin, GPIO_PIN_SET);
-  ButtonInput_Init(&buttonUser, B_User_GPIO_Port, B_User_Pin, GPIO_PIN_SET);
-  ButtonInput_Init(&buttonStart, B_Start_GPIO_Port, B_Start_Pin, GPIO_PIN_SET);
-  ButtonInput_Init(&buttonSet, B_Set_GPIO_Port, B_Set_Pin, GPIO_PIN_SET);
-  ButtonInput_Init(&buttonUp, B_Up_GPIO_Port, B_Up_Pin, GPIO_PIN_SET);
-  ButtonInput_Init(&buttonDown, B_Down_GPIO_Port, B_Down_Pin, GPIO_PIN_SET);
-
-  activeConfig = programPresets[0];
-  startupWaterReady = 0U;
-  App_InitPt100();
-  App_UpdatePt100(HAL_GetTick());
-  App_UpdateDisplay(HAL_GetTick());
-}
-
-static void App_UpdateButtons(void)
-{
-  uint32_t now = HAL_GetTick();
-
-  for (uint8_t i = 0U; i < 6U; ++i) {
-    ButtonInput_Update(&programButtons[i], now, BUTTON_DEBOUNCE_MS, BUTTON_LONG_PRESS_MS, BUTTON_REPEAT_MS);
-  }
-
-  ButtonInput_Update(&buttonUser, now, BUTTON_DEBOUNCE_MS, BUTTON_LONG_PRESS_MS, BUTTON_REPEAT_MS);
-  ButtonInput_Update(&buttonStart, now, BUTTON_DEBOUNCE_MS, BUTTON_LONG_PRESS_MS, BUTTON_REPEAT_MS);
-  ButtonInput_Update(&buttonSet, now, BUTTON_DEBOUNCE_MS, BUTTON_LONG_PRESS_MS, BUTTON_REPEAT_MS);
-  ButtonInput_Update(&buttonUp, now, BUTTON_DEBOUNCE_MS, BUTTON_LONG_PRESS_MS, BUTTON_REPEAT_MS);
-  ButtonInput_Update(&buttonDown, now, BUTTON_DEBOUNCE_MS, BUTTON_LONG_PRESS_MS, BUTTON_REPEAT_MS);
-}
-
-static void App_HandleInput(uint32_t now)
-{
-  if (startupWaterReady == 0U) {
-    return;
-  }
-
-  for (uint8_t i = 0U; i < 6U; ++i) {
-    if (ButtonInput_ConsumePressed(&programButtons[i]) != 0U) {
-      if (appMode == APP_MODE_RUN_PROGRAM) {
-        App_RequestShortBeep();
-        continue;
-      }
-      /* Nút chương trình hoạt động kiểu "radio":
-         chọn P mới thì P cũ tự bỏ chọn, luôn giữ đúng 1 chương trình đang chọn. */
-      App_StartProgram(i, &programPresets[i]);
-      App_RequestShortBeep();
-    }
-  }
-
-  if (ButtonInput_ConsumePressed(&buttonUser) != 0U) {
-    if (appMode == APP_MODE_RUN_PROGRAM) {
-      App_RequestShortBeep();
-    }
-    else {
-      if (appMode == APP_MODE_USER_EDIT) {
-        appMode = APP_MODE_IDLE;
-        activeProgramIndex = 0xFFU;
-        runCompleteLatched = 0U;
-      }
-      else {
-        appMode = APP_MODE_USER_EDIT;
-        selectedUserField = USER_FIELD_TEMP;
-        activeProgramIndex = 0xFFU;
-        activeConfig = userConfig;
-        runCompleteLatched = 0U;
-        lastDisplaySwapTick = now;
-      }
-      App_RequestShortBeep();
-    }
-  }
-
-  if (ButtonInput_ConsumePressed(&buttonStart) != 0U) {
-    if (appMode == APP_MODE_RUN_PROGRAM) {
-      App_ResetToInitialIdle();
-      App_RequestPatternBeep(1U, 1000U);
-    }
-    else if (appMode == APP_MODE_READY || appMode == APP_MODE_USER_EDIT) {
-      HAL_GPIO_WritePin(LD_Alarm_GPIO_Port, LD_Alarm_Pin, GPIO_PIN_RESET);
-      if (appMode == APP_MODE_USER_EDIT) {
-        userConfig = activeConfig;
-      }
-      if (App_PreStartChecks() != 0U) {
-        App_BeginRun();
-        App_RequestPatternBeep(2U, 500U);
-      }
-    }
-    else {
-      App_RequestShortBeep();
-      }
-    }
-
-  if (appMode == APP_MODE_USER_EDIT) {
-    if (ButtonInput_ConsumePressed(&buttonSet) != 0U) {
-      selectedUserField = (UserField)(((uint8_t)selectedUserField + 1U) % 3U);
-      App_RequestShortBeep();
-    }
-
-    if (ButtonInput_ConsumePressed(&buttonUp) != 0U) {
-      App_AdjustUserField(1);
-      App_RequestShortBeep();
-    }
-    if (ButtonInput_ConsumeRepeat(&buttonUp) != 0U) {
-      App_AdjustUserField(10);
-    }
-
-    if (ButtonInput_ConsumePressed(&buttonDown) != 0U) {
-      App_AdjustUserField(-1);
-      App_RequestShortBeep();
-    }
-    if (ButtonInput_ConsumeRepeat(&buttonDown) != 0U) {
-      App_AdjustUserField(-10);
-    }
-
-    userConfig = activeConfig;
-  }
-}
-
-static void App_UpdateDisplay(uint32_t now)
-{
-  uint8_t blinkState = App_BlinkState(now);
-  uint32_t elapsedMs;
-  uint32_t remainingMs;
-  uint8_t remainingMinutes;
-
-  if (appErrorCode != APP_ERROR_NONE) {
-    tm1637Clear(&display1);
-    App_DisplayError(&display2, appErrorCode);
-    return;
-  }
-  else if (appMode == APP_MODE_RUN_PROGRAM) {
-    if (pt100TemperatureValid != 0U) {
-      tm1637DisplayDecimalTenths(&display2, pt100TempTenths);
-    }
-    else {
-      tm1637Clear(&display1);
-      App_DisplayError(&display2, APP_ERROR_PT100);
-      return;
-    }
-  }
-  else {
-    tm1637DisplayDecimalTenths(&display2, activeConfig.steamTempTenths);
-  }
-
-  if (appMode == APP_MODE_USER_EDIT) {
-    if (selectedUserField == USER_FIELD_STERILIZE) {
-      if (blinkState != 0U) {
-        App_DisplayStValue(activeConfig.sterilizeMinutes);
-      }
-      else {
-        tm1637Clear(&display1);
-      }
-    }
-    else if (selectedUserField == USER_FIELD_DRY) {
-      if (blinkState != 0U) {
-        App_DisplayDrValue(activeConfig.dryMinutes);
-      }
-      else {
-        tm1637Clear(&display1);
-      }
-    }
-    else {
-      App_DisplayStValue(activeConfig.sterilizeMinutes);
-    }
-
-    return;
-    }
-
-  if (appMode == APP_MODE_RUN_PROGRAM) {
-      if (runStage == RUN_STAGE_HEAT) {
-        elapsedMs = now - runStageStartTick;
-        remainingMs = (elapsedMs >= HEAT_TIMEOUT_MS) ? 0U : (HEAT_TIMEOUT_MS - elapsedMs);
-        remainingMinutes = (uint8_t)((remainingMs + 59999U) / 60000U);
-        App_DisplayStValue(remainingMinutes);
-        return;
-      }
-
-      if (runStage == RUN_STAGE_DRY) {
-        elapsedMs = now - runStageStartTick;
-        remainingMs = (elapsedMs >= runStageDurationMs) ? 0U : (runStageDurationMs - elapsedMs);
-        remainingMinutes = (uint8_t)((remainingMs + 59999U) / 60000U);
-        App_DisplayDrValue(remainingMinutes);
-        return;
-      }
-    }
-
-    if ((((now - lastDisplaySwapTick) / DISPLAY_SWAP_MS) % 2U) == 0U) {
-      App_DisplayStValue(activeConfig.sterilizeMinutes);
-    }
-    else {
-    App_DisplayDrValue(activeConfig.dryMinutes);
-  }
-}
-
-static void App_UpdateLeds(uint32_t now)
-{
-  GPIO_TypeDef *programPorts[6] = {LD_P1_GPIO_Port, LD_P2_GPIO_Port, LD_P3_GPIO_Port,
-                                   LD_P4_GPIO_Port, LD_P5_GPIO_Port, LD_P6_GPIO_Port};
-  uint16_t programPins[6] = {LD_P1_Pin, LD_P2_Pin, LD_P3_Pin, LD_P4_Pin, LD_P5_Pin, LD_P6_Pin};
-  GPIO_PinState blink = App_BlinkState(now) ? GPIO_PIN_SET : GPIO_PIN_RESET;
-  GPIO_PinState isUserEdit = (appMode == APP_MODE_USER_EDIT) ? GPIO_PIN_SET : GPIO_PIN_RESET;
-
-  for (uint8_t i = 0U; i < 6U; ++i) {
-    GPIO_PinState state = GPIO_PIN_RESET;
-    if (activeProgramIndex == i) {
-      state = (appMode == APP_MODE_USER_EDIT) ? blink : GPIO_PIN_SET;
-    }
-    HAL_GPIO_WritePin(programPorts[i], programPins[i], state);
-  }
-
-  if (appMode == APP_MODE_USER_EDIT) {
-      HAL_GPIO_WritePin(LD_User_GPIO_Port, LD_User_Pin, blink);
-  }
-  else if (appMode == APP_MODE_RUN_PROGRAM && runUsesUserConfig != 0U) {
-    HAL_GPIO_WritePin(LD_User_GPIO_Port, LD_User_Pin, GPIO_PIN_SET);
-  }
-  else {
-    HAL_GPIO_WritePin(LD_User_GPIO_Port, LD_User_Pin, GPIO_PIN_RESET);
-  }
-
-  if (runCompleteLatched != 0U) {
-    GPIO_PinState completeState = GPIO_PIN_SET;
-    if ((now - runCompleteTick) < RUN_COMPLETE_BLINK_MS) {
-      completeState = blink;
-    }
-
-    HAL_GPIO_WritePin(LD_C1_GPIO_Port, LD_C1_Pin, completeState);
-    HAL_GPIO_WritePin(LD_C2_GPIO_Port, LD_C2_Pin, completeState);
-    HAL_GPIO_WritePin(LD_C3_GPIO_Port, LD_C3_Pin, completeState);
-    HAL_GPIO_WritePin(LD_C4_GPIO_Port, LD_C4_Pin, completeState);
-    HAL_GPIO_WritePin(LD_C5_GPIO_Port, LD_C5_Pin, completeState);
-    HAL_GPIO_WritePin(LD_C6_GPIO_Port, LD_C6_Pin, completeState);
-    HAL_GPIO_WritePin(LD_C7_GPIO_Port, LD_C7_Pin, completeState);
-  }
-  else if (appMode == APP_MODE_RUN_PROGRAM) {
-    GPIO_PinState c1State = GPIO_PIN_RESET;
-    GPIO_PinState c2State = GPIO_PIN_RESET;
-    GPIO_PinState c3State = GPIO_PIN_RESET;
-    GPIO_PinState c4State = GPIO_PIN_RESET;
-    GPIO_PinState c5State = GPIO_PIN_RESET;
-    GPIO_PinState c6State = GPIO_PIN_RESET;
-    GPIO_PinState c7State = GPIO_PIN_RESET;
-
-    if (runStage == RUN_STAGE_VACUUM) {
-      c1State = blink;
-    }
-    else if (runStage == RUN_STAGE_HEAT) {
-      c1State = GPIO_PIN_SET;
-      c2State = blink;
-    }
-    else if (runStage == RUN_STAGE_HOLD) {
-      uint8_t holdSegment = 0U;
-      c1State = GPIO_PIN_SET;
-      c2State = GPIO_PIN_SET;
-      if (runStageDurationMs > 0U) {
-        uint32_t elapsed = now - runStageStartTick;
-        holdSegment = (uint8_t)((elapsed * 3U) / runStageDurationMs);
-        if (holdSegment > 2U) {
-          holdSegment = 2U;
-         }
-      }
-
-      c3State = (holdSegment > 0U) ? GPIO_PIN_SET : blink;
-      c4State = (holdSegment > 1U) ? GPIO_PIN_SET : ((holdSegment == 1U) ? blink : GPIO_PIN_RESET);
-      c5State = (holdSegment == 2U) ? blink : GPIO_PIN_RESET;
-    }
-      else if (runStage == RUN_STAGE_VENT) {
-        c1State = GPIO_PIN_SET;
-        c2State = GPIO_PIN_SET;
-        c3State = GPIO_PIN_SET;
-        c4State = GPIO_PIN_SET;
-        c5State = GPIO_PIN_SET;
-        c6State = blink;
-      }
-      else if (runStage == RUN_STAGE_DRY) {
-        c1State = GPIO_PIN_SET;
-        c2State = GPIO_PIN_SET;
-        c3State = GPIO_PIN_SET;
-        c4State = GPIO_PIN_SET;
-        c5State = GPIO_PIN_SET;
-        c6State = GPIO_PIN_SET;
-        c7State = blink;
-      }
-
-    HAL_GPIO_WritePin(LD_C1_GPIO_Port, LD_C1_Pin, c1State);
-    HAL_GPIO_WritePin(LD_C2_GPIO_Port, LD_C2_Pin, c2State);
-    HAL_GPIO_WritePin(LD_C3_GPIO_Port, LD_C3_Pin, c3State);
-    HAL_GPIO_WritePin(LD_C4_GPIO_Port, LD_C4_Pin, c4State);
-    HAL_GPIO_WritePin(LD_C5_GPIO_Port, LD_C5_Pin, c5State);
-    HAL_GPIO_WritePin(LD_C6_GPIO_Port, LD_C6_Pin, c6State);
-    HAL_GPIO_WritePin(LD_C7_GPIO_Port, LD_C7_Pin, c7State);
-  }
-  else {
-    HAL_GPIO_WritePin(LD_C1_GPIO_Port, LD_C1_Pin, GPIO_PIN_RESET);
-	HAL_GPIO_WritePin(LD_C2_GPIO_Port, LD_C2_Pin, GPIO_PIN_RESET);
-	HAL_GPIO_WritePin(LD_C3_GPIO_Port, LD_C3_Pin, GPIO_PIN_RESET);
-	HAL_GPIO_WritePin(LD_C4_GPIO_Port, LD_C4_Pin, GPIO_PIN_RESET);
-    HAL_GPIO_WritePin(LD_C5_GPIO_Port, LD_C5_Pin, GPIO_PIN_RESET);
-	HAL_GPIO_WritePin(LD_C6_GPIO_Port, LD_C6_Pin, GPIO_PIN_RESET);
-  }
-
-  HAL_GPIO_WritePin(LD_Start_GPIO_Port, LD_Start_Pin, (appMode == APP_MODE_RUN_PROGRAM) ? GPIO_PIN_SET : GPIO_PIN_RESET);
-  if (isUserEdit == GPIO_PIN_SET) {
-    HAL_GPIO_WritePin(LD_Start_GPIO_Port, LD_Start_Pin, blink);
-  }
-}
-
-static void App_StartProgram(uint8_t index, const ProgramConfig *cfg)
-{
-  if (cfg == NULL || index >= 6U) {
-    return;
-  }
-
-  activeProgramIndex = index;
-  activeConfig = *cfg;
-  appMode = APP_MODE_READY;
-  lastDisplaySwapTick = HAL_GetTick();
-  runCompleteLatched = 0U;
-  runUsesUserConfig = 0U;
-}
-
- static void App_BeginRun(void)
- {
-  runUsesUserConfig = (appMode == APP_MODE_USER_EDIT) ? 1U : 0U;
-  programStartTick = HAL_GetTick();
-  appErrorCode = APP_ERROR_NONE;
-  appMode = APP_MODE_RUN_PROGRAM;
-  lastDisplaySwapTick = programStartTick;
-  runCompleteLatched = 0U;
-  lastPumpCommand = GPIO_PIN_RESET;
-  pumpLastOffTick = programStartTick;
-  App_ActivateRunStage(RUN_STAGE_VACUUM, programStartTick);
-}
-
-static void App_AdjustUserField(int16_t delta)
-{
-  int32_t nextValue;
-
-  if (selectedUserField == USER_FIELD_TEMP) {
-    nextValue = (int32_t)activeConfig.steamTempTenths + delta;
-    if (nextValue < 1050) {
-      nextValue = 1050;
-    }
-    if (nextValue > 1340) {
-      nextValue = 1340;
-    }
-    activeConfig.steamTempTenths = (uint16_t)nextValue;
-  }
-  else if (selectedUserField == USER_FIELD_STERILIZE) {
-    nextValue = (int32_t)activeConfig.sterilizeMinutes + delta;
-    if (nextValue < 0) {
-      nextValue = 0;
-    }
-    if (nextValue > 99) {
-      nextValue = 99;
-    }
-    activeConfig.sterilizeMinutes = (uint8_t)nextValue;
-  }
-  else {
-    nextValue = (int32_t)activeConfig.dryMinutes + delta;
-    if (nextValue < 0) {
-      nextValue = 0;
-    }
-    if (nextValue > 99) {
-      nextValue = 99;
-    }
-    activeConfig.dryMinutes = (uint8_t)nextValue;
-  }
-}
-
-static uint8_t App_BlinkState(uint32_t now)
-{
-  return (((now / BLINK_PERIOD_MS) % 2U) == 0U) ? 1U : 0U;
-}
-
-static void App_DisplayStValue(uint8_t minutes)
-{
-  uint8_t segments[4] = {0};
-  segments[0] = App_EncodeSegmentChar('S');
-  segments[1] = App_EncodeSegmentChar('t');
-  segments[2] = App_EncodeSegmentChar((char)('0' + ((minutes / 10U) % 10U)));
-  segments[3] = App_EncodeSegmentChar((char)('0' + (minutes % 10U)));
-  tm1637DisplaySegments(&display1, segments);
-}
-
-static void App_DisplayDrValue(uint8_t minutes)
-{
-  uint8_t segments[4] = {0};
-  segments[0] = App_EncodeSegmentChar('D');
-  segments[1] = App_EncodeSegmentChar('r');
-  segments[2] = App_EncodeSegmentChar((char)('0' + ((minutes / 10U) % 10U)));
-  segments[3] = App_EncodeSegmentChar((char)('0' + (minutes % 10U)));
-  tm1637DisplaySegments(&display1, segments);
-}
-
-static uint8_t App_EncodeSegmentChar(char c)
-{
-  switch (c) {
-    case '0': return 0x3f;
-    case '1': return 0x06;
-    case '2': return 0x5b;
-    case '3': return 0x4f;
-    case '4': return 0x66;
-    case '5': return 0x6d;
-    case '6': return 0x7d;
-    case '7': return 0x07;
-    case '8': return 0x7f;
-    case '9': return 0x6f;
-    case 'S': return 0x6d;
-    case 't': return 0x78;
-    case 'D': return 0x5e;
-    case 'E': return 0x79;
-    case 'r': return 0x50;
-    default: return 0x00;
-  }
-}
-
-static void App_InitPt100(void)
-{
-  uint8_t fault;
-
-  Max31865_Init(&pt100Sensor, &hspi3, CS_GPIO_Port, CS_Pin,  PT100_RREF_OHMS, PT100_RNOMINAL_OHMS);
-  if (Max31865_Begin(&pt100Sensor, PT100_WIRE_MODE, 1U) == 0U) {
-	  pt100TemperatureValid = 0U;
-	  pt100FaultCode = 0xFFU;
-	  if (appMode == APP_MODE_RUN_PROGRAM) {
-	    App_RaiseError(APP_ERROR_PT100);
-	  }
-  return;
-  }
-  Max31865_EnableBias(&pt100Sensor, 1U);
-  Max31865_AutoConvert(&pt100Sensor, 1U);
-  HAL_Delay(70U);
-  Max31865_ClearFault(&pt100Sensor);
-  fault = Max31865_ReadFault(&pt100Sensor, MAX31865_FAULT_AUTO);
-  if (fault != 0U) {
-    pt100TemperatureValid = 0U;
-    pt100FaultCode = fault;
-    return;
-  }
-
-  lastPt100SampleTick = HAL_GetTick() - PT100_SAMPLE_MS;
-  pt100TemperatureValid = 0U;
-  pt100FaultCode = 0U;
-}
-
-static void App_UpdatePt100(uint32_t now)
-{
-  int16_t measuredTempTenths;
-
-  if ((now - lastPt100SampleTick) < PT100_SAMPLE_MS) {
-    return;
-  }
-
-  lastPt100SampleTick = now;
-  /* Xóa cờ lỗi tồn trước khi đo để tránh treo Er01 giả khi cảm biến/PT100 vẫn tốt. */
-  Max31865_ClearFault(&pt100Sensor);
-  if (Max31865_ReadTemperatureTenthsC(&pt100Sensor, &measuredTempTenths) == 0U) {
-       pt100TemperatureValid = 0U;
-       pt100FaultCode = 0xFFU;
-       if (appMode == APP_MODE_RUN_PROGRAM) {
-         App_RaiseError(APP_ERROR_PT100);
-       }
-       return;
-   }
-
-  pt100FaultCode = Max31865_ReadFault(&pt100Sensor, MAX31865_FAULT_NONE);
-    if (pt100FaultCode != 0U) {
-      uint8_t retry;
-
-      /* Retry 2 lần để lọc nhiễu tức thời trên bus SPI/PT100. */
-      for (retry = 0U; retry < 2U; retry++) {
-        Max31865_ClearFault(&pt100Sensor);
-        if (Max31865_ReadTemperatureTenthsC(&pt100Sensor, &measuredTempTenths) == 0U) {
-          pt100TemperatureValid = 0U;
-          if (appMode == APP_MODE_RUN_PROGRAM) {
-            App_RaiseError(APP_ERROR_PT100);
-          }
-          return;
-        }
-
-        pt100FaultCode = Max31865_ReadFault(&pt100Sensor, MAX31865_FAULT_NONE);
-        if (pt100FaultCode == 0U) {
-          break;
-        }
-      }
-
-      if (pt100FaultCode != 0U) {
-        pt100TemperatureValid = 0U;
-        if (appMode == APP_MODE_RUN_PROGRAM) {
-          App_RaiseError(APP_ERROR_PT100);
-        }
-        return;
-      }
-    }
-
-  pt100TempTenths = measuredTempTenths;
-  pt100TemperatureValid = 1U;
-  if (appErrorCode == APP_ERROR_PT100) {
-    appErrorCode = APP_ERROR_NONE;
-    HAL_GPIO_WritePin(LD_Alarm_GPIO_Port, LD_Alarm_Pin, GPIO_PIN_RESET);
-    }
-  }
-
-static void App_DisplayError(TM1637Handle *display, AppErrorCode code)
-{
-  uint8_t segments[4] = {0};
-  uint8_t errorNumber = (uint8_t)code;
-
-  if (display == NULL) {
-    return;
-  }
-
-  if (errorNumber > 99U) {
-    errorNumber = 99U;
-  }
-
-  segments[0] = App_EncodeSegmentChar('E');
-  segments[1] = App_EncodeSegmentChar('r');
-  segments[2] = App_EncodeSegmentChar((char)('0' + ((errorNumber / 10U) % 10U)));
-  segments[3] = App_EncodeSegmentChar((char)('0' + (errorNumber % 10U)));
-  tm1637DisplaySegments(display, segments);
-}
-
-static uint8_t App_PreStartChecks(void)
-{
-  if (App_CheckWaterReady() == 0U) {
-    return 0U;
-  }
-
-  if (App_CheckPt100Ready() == 0U) {
-    return 0U;
-  }
-
-  if (App_CheckDoorClosed() == 0U) {
-    return 0U;
-  }
-
-  return 1U;
-}
-
-static uint8_t App_CheckWaterReady(void)
-{
-  uint32_t startTick = HAL_GetTick();
-
-  /* PC10 (Water_Sennor): HIGH = thiếu nước, LOW = đủ nước */
-    if (App_ReadWaterLevelStableState() == GPIO_PIN_SET) {
-      HAL_GPIO_WritePin(Relay_Valve_1_GPIO_Port, Relay_Valve_1_Pin, GPIO_PIN_SET);
-      HAL_GPIO_WritePin(LD_LW_GPIO_Port, LD_LW_Pin, GPIO_PIN_RESET);
-      HAL_GPIO_WritePin(LD_HW_GPIO_Port, LD_HW_Pin, GPIO_PIN_SET);
-
-    while ((HAL_GetTick() - startTick) < WATER_REFILL_TIMEOUT_MS) {
-      uint32_t now = HAL_GetTick();
-
-      if (App_ReadWaterLevelStableState() == GPIO_PIN_RESET) {
-    	  break;
-      }
-
-      /* Tránh vòng lặp busy-wait làm "đơ" hiển thị/còi trong lúc chờ cấp nước. */
-      App_UpdateDisplay(now);
-      App_UpdateLeds(now);
-      App_UpdateBuzzer(now);
-      HAL_Delay(10U);
-    }
-
-    HAL_GPIO_WritePin(Relay_Valve_1_GPIO_Port, Relay_Valve_1_Pin, GPIO_PIN_RESET);
-    if (App_ReadWaterLevelStableState() == GPIO_PIN_SET) {
-      App_RaiseError(APP_ERROR_WATER);
-      return 0U;
-    }
-  }
-
-    if (appErrorCode == APP_ERROR_WATER) {
-      appErrorCode = APP_ERROR_NONE;
-    }
-    HAL_GPIO_WritePin(LD_LW_GPIO_Port, LD_LW_Pin, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(LD_HW_GPIO_Port, LD_HW_Pin, GPIO_PIN_RESET);
-    if (appErrorCode == APP_ERROR_NONE) {
-      HAL_GPIO_WritePin(LD_Alarm_GPIO_Port, LD_Alarm_Pin, GPIO_PIN_RESET);
-  }
-    return 1U;
-}
-
-static uint8_t App_IsWaterSufficient(void)
-{
-  return (App_ReadWaterLevelStableState() == GPIO_PIN_RESET) ? 1U : 0U;
-}
-
-static uint8_t App_CheckPt100Ready(void)
-{
-  uint32_t now = HAL_GetTick();
-  App_UpdatePt100(now);
-
-  if (pt100TemperatureValid != 0U) {
-    if (appErrorCode == APP_ERROR_PT100) {
-      appErrorCode = APP_ERROR_NONE;
-      HAL_GPIO_WritePin(LD_Alarm_GPIO_Port, LD_Alarm_Pin, GPIO_PIN_RESET);
-    }
-    return 1U;
-  }
-
-  App_RaiseError(APP_ERROR_PT100);
-  return 0U;
-}
-
-static GPIO_PinState App_ReadWaterLevelStableState(void)
-{
-  uint8_t lowCount = 0U;
-  uint8_t i;
-
-  /* PC10 (Water_Sennor): HIGH = thiếu nước, LOW = đủ nước */
-  for (i = 0U; i < WATER_SENSOR_FILTER_SAMPLES; i++) {
-    if (HAL_GPIO_ReadPin(Water_Sennor_GPIO_Port, Water_Sennor_Pin) == GPIO_PIN_RESET) {
-      lowCount++;
-    }
-    HAL_Delay(WATER_SENSOR_FILTER_DELAY_MS);
-  }
-
-  return (lowCount >= ((WATER_SENSOR_FILTER_SAMPLES / 2U) + 1U)) ? GPIO_PIN_RESET : GPIO_PIN_SET;
-}
-
-static uint8_t App_CheckDoorClosed(void)
-{
-  /* PB13 (L_Switch): HIGH = cửa đã đóng */
-  if (HAL_GPIO_ReadPin(L_Switch_GPIO_Port, L_Switch_Pin) == GPIO_PIN_SET) {
-    if (appErrorCode == APP_ERROR_DOOR) {
-      appErrorCode = APP_ERROR_NONE;
-      HAL_GPIO_WritePin(LD_Alarm_GPIO_Port, LD_Alarm_Pin, GPIO_PIN_RESET);
-    }
-    return 1U;
-  }
-
-  App_RaiseError(APP_ERROR_DOOR);
-  return 0U;
-}
-
-static void App_HandleStartupChecks(void)
-{
-  if (startupWaterReady != 0U) {
-    return;
-  }
-
-  if (App_CheckWaterReady() != 0U) {
-    startupWaterReady = 1U;
-    HAL_GPIO_WritePin(LD_Alarm_GPIO_Port, LD_Alarm_Pin, GPIO_PIN_RESET);
-  }
-}
-
-
-static void App_RequestShortBeep(void)
-{
-  App_RequestPatternBeep(1U, BUZZER_SHORT_MS);
-}
-
-static void App_RequestPatternBeep(uint8_t blinks, uint32_t phaseMs)
-{
-  if (blinks == 0U || phaseMs == 0U) {
-    HAL_GPIO_WritePin(Buzzer_GPIO_Port, Buzzer_Pin, GPIO_PIN_RESET);
-    buzzerActive = 0U;
-    return;
-  }
-
-  buzzerActive = 1U;
-  buzzerPhaseIsOn = 1U;
-  buzzerPhasesRemaining = (uint8_t)(blinks * 2U);
-  buzzerPhaseDurationMs = phaseMs;
-  buzzerPhaseTick = HAL_GetTick();
-  HAL_GPIO_WritePin(Buzzer_GPIO_Port, Buzzer_Pin, GPIO_PIN_SET);
-}
-
-static void App_InitHeaterPid(void)
-{
-  PID2(&heaterPid, &heaterPidInput, &heaterPidOutput, &heaterPidSetpoint,
-       HEATER_PID_KP, HEATER_PID_KI, HEATER_PID_KD, _PID_CD_DIRECT);
-  /* Output PID được chuẩn hóa 0..100 (%) để quy đổi ra thời gian ON trong mỗi cửa sổ. */
-  PID_SetOutputLimits(&heaterPid, 0.0, HEATER_PID_OUTPUT_MAX_PERCENT);
-  PID_SetSampleTime(&heaterPid, (int32_t)HEATER_PID_SAMPLE_MS);
-  PID_SetMode(&heaterPid, _PID_MODE_AUTOMATIC);
-  heaterPidWindowStartTick = HAL_GetTick();
-  heaterPidOnTimeMs = 0U;
-  heaterPidReady = 1U;
-}
-
-static void App_PrepareHoldPid(uint32_t now)
-{
-  if (heaterPidReady == 0U) {
-    App_InitHeaterPid();
-  }
-
-  heaterPidSetpoint = (double)activeConfig.steamTempTenths / 10.0;
-  heaterPidInput = (double)pt100TempTenths / 10.0;
-  heaterPidOutput = 0.0;
-  heaterPidOnTimeMs = 0U;
-  PID_SetMode(&heaterPid, _PID_MODE_MANUAL);
-  PID_SetMode(&heaterPid, _PID_MODE_AUTOMATIC);
-  heaterPidWindowStartTick = now;
-}
-
-static GPIO_PinState App_ComputeHoldHeaterState(uint32_t now)
-{
-  uint32_t windowElapsed;
-
-  if (heaterPidReady == 0U) {
-    App_InitHeaterPid();
-  }
-
-  if (pt100TemperatureValid == 0U) {
-    return GPIO_PIN_RESET;
-  }
-
-  heaterPidSetpoint = (double)activeConfig.steamTempTenths / 10.0;
-  heaterPidInput = (double)pt100TempTenths / 10.0;
-  (void)PID_Compute(&heaterPid);
-  heaterPidOnTimeMs = (uint32_t)((heaterPidOutput * (double)HEATER_PID_WINDOW_MS) / HEATER_PID_OUTPUT_MAX_PERCENT);
-  if (heaterPidOnTimeMs > HEATER_PID_WINDOW_MS) {
-    heaterPidOnTimeMs = HEATER_PID_WINDOW_MS;
-  }
-
-  while ((now - heaterPidWindowStartTick) >= HEATER_PID_WINDOW_MS) {
-    heaterPidWindowStartTick += HEATER_PID_WINDOW_MS;
-  }
-
-  windowElapsed = now - heaterPidWindowStartTick;
-  /* SSR nhận tín hiệu ON/OFF: bật trong khoảng heaterPidOnTimeMs, tắt phần còn lại của cửa sổ. */
-  if (windowElapsed < heaterPidOnTimeMs) {
-    return GPIO_PIN_SET;
-  }
-
-  return GPIO_PIN_RESET;
-}
-
-static void App_UpdateBuzzer(uint32_t now)
-{
-  if (buzzerActive == 0U) {
-    HAL_GPIO_WritePin(Buzzer_GPIO_Port, Buzzer_Pin, GPIO_PIN_RESET);
-    return;
-  }
-
-  if ((now - buzzerPhaseTick) < buzzerPhaseDurationMs) {
-    return;
-  }
-
-  buzzerPhaseTick = now;
-  if (buzzerPhasesRemaining > 0U) {
-    --buzzerPhasesRemaining;
-  }
-
-  if (buzzerPhasesRemaining == 0U) {
-    buzzerActive = 0U;
-    HAL_GPIO_WritePin(Buzzer_GPIO_Port, Buzzer_Pin, GPIO_PIN_RESET);
-    return;
-  }
-
-  buzzerPhaseIsOn = (uint8_t)(1U - buzzerPhaseIsOn);
-  HAL_GPIO_WritePin(Buzzer_GPIO_Port, Buzzer_Pin, (buzzerPhaseIsOn != 0U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
-}
-
-static void App_UpdateRunState(uint32_t now)
-{
-  App_ApplyRunOutputs(now);
-
-  if (appMode != APP_MODE_RUN_PROGRAM) {
-    return;
-  }
-
-  if (pt100TemperatureValid == 0U) {
-    App_RaiseError(APP_ERROR_PT100);
-    App_EmergencyStop(0U);
-    return;
-  }
-
-  if (App_CheckDoorClosed() == 0U) {
-    App_EmergencyStop(0U);
-    return;
-  }
-
-  if ((runStage == RUN_STAGE_VACUUM || runStage == RUN_STAGE_HEAT || runStage == RUN_STAGE_HOLD) &&
-         (App_IsWaterSufficient() == 0U)) {
-    App_RaiseError(APP_ERROR_WATER);
-    App_EmergencyStop(0U);
-    return;
-  }
-
-  if ((pt100TemperatureValid != 0U) && (pt100TempTenths >= EMERGENCY_STOP_TEMP_TENTHS)) {
-	App_RaiseError(APP_ERROR_OVER_TEMPERATURE);
-    App_EmergencyStop(1U);
-    return;
-  }
-
-  if ((runStage == RUN_STAGE_HEAT) && ((now - runStageStartTick) >= HEAT_TIMEOUT_MS)) {
-    App_RaiseError(APP_ERROR_HEAT_TIMEOUT);
-    App_EmergencyStop(0U);
-    return;
-  }
-
-  if (App_IsRunStageTimedOut(now) != 0U) {
-    App_MoveToNextRunStage(now);
-  }
-
-  if (runStage == RUN_STAGE_IDLE) {
-    appMode = APP_MODE_READY;
-    runCompleteLatched = 1U;
-    runCompleteTick = now;
-    App_RequestPatternBeep(3U, 1000U);
-  }
-}
-
-static void App_ApplyRunOutputs(uint32_t now)
-{
-  GPIO_PinState pumpState = GPIO_PIN_RESET;
-  GPIO_PinState valve2State = GPIO_PIN_RESET;
-  GPIO_PinState valve3State = GPIO_PIN_RESET;
-  GPIO_PinState valve4State = GPIO_PIN_RESET;
-  GPIO_PinState valve5State = GPIO_PIN_RESET;
-  GPIO_PinState steamHeaterState = GPIO_PIN_RESET;
-  GPIO_PinState dryHeaterState = GPIO_PIN_RESET;
-
-  if (appMode == APP_MODE_RUN_PROGRAM) {
-    switch (runStage) {
-      case RUN_STAGE_VACUUM: {
-        uint32_t elapsed = now - runStageStartTick;
-        uint32_t stepMs = RUN_STAGE_VACUUM_MS / RUN_STAGE_VACUUM_SUB_STEPS;
-        uint8_t stepIndex = 0U;
-        if (stepMs > 0U) {
-          stepIndex = (uint8_t)(elapsed / stepMs);
-        }
-        if (stepIndex >= RUN_STAGE_VACUUM_SUB_STEPS) {
-          stepIndex = RUN_STAGE_VACUUM_SUB_STEPS - 1U;
-        }
-
-        if ((stepIndex % 2U) == 0U) {
-          /* 3 lần hút chân không: bật pump + valve 2 */
-          pumpState = GPIO_PIN_SET;
-          valve2State = GPIO_PIN_SET;
-        }
-        else {
-          /* Xen kẽ 2 lần gia nhiệt bằng Heater PE10 */
-          steamHeaterState = GPIO_PIN_SET;
-        }
-        break;
-      }
-
-      case RUN_STAGE_HEAT:
-        /* Gia nhiệt đến đúng nhiệt độ mục tiêu của chương trình P1-P6 hoặc User */
-        if ((pt100TemperatureValid != 0U) && (pt100TempTenths < (int16_t)activeConfig.steamTempTenths)) {
-          steamHeaterState = GPIO_PIN_SET;
-        }
-        break;
-
-      case RUN_STAGE_HOLD:
-        /* Giữ nhiệt: đóng/cắt Heater theo PID */
-        steamHeaterState = App_ComputeHoldHeaterState(now);
-        break;
-
-      case RUN_STAGE_VENT: {
-        uint32_t elapsed = now - runStageStartTick;
-
-        if (elapsed < RUN_STAGE_VENT_DRAIN_MS) {
-          /* 2 phút đầu: mở valve 3 xả nước trong buồng. */
-          valve3State = GPIO_PIN_SET;
-        }
-        else if (elapsed < (RUN_STAGE_VENT_DRAIN_MS + RUN_STAGE_VENT_RELEASE_MS)) {
-          /* 2 phút tiếp theo: mở valve 4 xả khí. */
-          valve4State = GPIO_PIN_SET;
-        }
-        else {
-          /* 5 phút cuối: bật pump + valve 2 để hút chân không. */
-          pumpState = GPIO_PIN_SET;
-          valve2State = GPIO_PIN_SET;
-        }
-        break;
-      }
-
-      case RUN_STAGE_DRY:
-        /* Giai đoạn sấy: bật pump liên tục và điều khiển PE11 giữ quanh 80°C */
-        pumpState = GPIO_PIN_SET;
-        if ((pt100TemperatureValid != 0U) && (pt100TempTenths < 780)) {
-          dryHeaterState = GPIO_PIN_SET;
-        }
-        else if (pt100TempTenths > 820) {
-          dryHeaterState = GPIO_PIN_RESET;
-        }
-        else {
-          dryHeaterState = HAL_GPIO_ReadPin(SSR_HResistor_GPIO_Port, SSR_HResistor_Pin);
-        }
-        break;
-
-      case RUN_STAGE_IDLE:
-      default:
-        break;
-    }
-  }
-  else if (runCompleteLatched != 0U) {
-    /* Sau khi hoàn tất, giữ mở valve 4 để cân bằng áp buồng. */
-    valve4State = GPIO_PIN_SET;
-  }
-
-  if (lastPumpCommand == GPIO_PIN_SET && pumpState == GPIO_PIN_RESET) {
-    pumpLastOffTick = now;
-  }
-  lastPumpCommand = pumpState;
-
-  HAL_GPIO_WritePin(Relay_Pump_GPIO_Port, Relay_Pump_Pin, pumpState);
-  HAL_GPIO_WritePin(Relay_Valve_2_GPIO_Port, Relay_Valve_2_Pin, valve2State);
-  HAL_GPIO_WritePin(Relay_Valve_3_GPIO_Port, Relay_Valve_3_Pin, valve3State);
-  HAL_GPIO_WritePin(Relay_Valve_4_GPIO_Port, Relay_Valve_4_Pin, valve4State);
-  HAL_GPIO_WritePin(Relay_Valve_5_GPIO_Port, Relay_Valve_5_Pin, valve5State);
-  HAL_GPIO_WritePin(SSR_Heater_GPIO_Port, SSR_Heater_Pin, steamHeaterState);
-  HAL_GPIO_WritePin(SSR_HResistor_GPIO_Port, SSR_HResistor_Pin, dryHeaterState);
-}
-
-static uint8_t App_IsRunStageTimedOut(uint32_t now)
-{
-  if (runStage == RUN_STAGE_VACUUM) {
-    /* Luôn giữ đủ thời gian chân không, tránh bị nhảy stage nếu duration bị reset ngoài ý muốn. */
-    return ((now - runStageStartTick) >= RUN_STAGE_VACUUM_MS) ? 1U : 0U;
-  }
-
-  if (runStage == RUN_STAGE_HEAT) {
-	/* HEAT dùng điều kiện nhiệt độ đạt setpoint thay cho timer stage. */
-    if (pt100TemperatureValid == 0U) {
-      return 0U;
-    }
-    return (pt100TempTenths >= (int16_t)activeConfig.steamTempTenths) ? 1U : 0U;
-    }
-
-    if (runStageDurationMs == 0U) {
-      return (runStage == RUN_STAGE_IDLE) ? 1U : 0U;
-    }
-
-    return ((now - runStageStartTick) >= runStageDurationMs) ? 1U : 0U;
-}
-
-static void App_MoveToNextRunStage(uint32_t now)
-{
-  switch (runStage) {
-    case RUN_STAGE_VACUUM:
-      App_ActivateRunStage(RUN_STAGE_HEAT, now);
-      break;
-    case RUN_STAGE_HEAT:
-      App_ActivateRunStage(RUN_STAGE_HOLD, now);
-      break;
-    case RUN_STAGE_HOLD:
-      App_ActivateRunStage(RUN_STAGE_VENT, now);
-      break;
-    case RUN_STAGE_VENT:
-      App_ActivateRunStage(RUN_STAGE_DRY, now);
-      break;
-    case RUN_STAGE_DRY:
-    default:
-      App_ActivateRunStage(RUN_STAGE_IDLE, now);
-      break;
-  }
-}
-
-static void App_ActivateRunStage(RunStage stage, uint32_t now)
-{
-  runStage = stage;
-  runStageStartTick = now;
-
-  switch (stage) {
-    case RUN_STAGE_VACUUM:
-      runStageDurationMs = RUN_STAGE_VACUUM_MS;
-      break;
-    case RUN_STAGE_HEAT:
-      /* Pha HEAT không chạy theo timer cố định.
-               Kết thúc khi App_IsRunStageTimedOut() xác nhận PT100 đạt setpoint. */
-      runStageDurationMs = 0U;
-      break;
-    case RUN_STAGE_HOLD:
-      /* Giữ nhiệt theo thời gian tiệt trùng (St). */
-      runStageDurationMs = (uint32_t)activeConfig.sterilizeMinutes * 60000U;
-      App_PrepareHoldPid(now);
-      break;
-    case RUN_STAGE_VENT:
-      runStageDurationMs = RUN_STAGE_VENT_MS;
-      break;
-    case RUN_STAGE_DRY:
-      /* Sấy theo thời gian sấy (Dr). */
-      runStageDurationMs = (uint32_t)activeConfig.dryMinutes * 60000U;
-      break;
-    case RUN_STAGE_IDLE:
-    default:
-      runStageDurationMs = 0U;
-      break;
-  }
-}
-static void App_EmergencyStop(uint8_t isOverTemperature)
-{
-  appMode = APP_MODE_IDLE;
-  runStage = RUN_STAGE_IDLE;
-  runStageDurationMs = 0U;
-  activeProgramIndex = 0xFFU;
-  runCompleteLatched = 0U;
-  runUsesUserConfig = 0U;
-
-  HAL_GPIO_WritePin(SSR_Heater_GPIO_Port, SSR_Heater_Pin, GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(SSR_HResistor_GPIO_Port, SSR_HResistor_Pin, GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(Relay_Pump_GPIO_Port, Relay_Pump_Pin, GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(Relay_Valve_2_GPIO_Port, Relay_Valve_2_Pin, GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(Relay_Valve_3_GPIO_Port, Relay_Valve_3_Pin, GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(Relay_Valve_4_GPIO_Port, Relay_Valve_4_Pin, GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(Relay_Valve_5_GPIO_Port, Relay_Valve_5_Pin, GPIO_PIN_RESET);
-
-  if (isOverTemperature != 0U) {
-    HAL_GPIO_WritePin(LD_Alarm_GPIO_Port, LD_Alarm_Pin, GPIO_PIN_SET);
-    App_RequestPatternBeep(3U, 500U);
-  }
-  else if (appErrorCode == APP_ERROR_NONE) {
-    HAL_GPIO_WritePin(LD_Alarm_GPIO_Port, LD_Alarm_Pin, GPIO_PIN_RESET);
-  }
-}
-
-static void App_ResetToInitialIdle(void)
-{
-  appMode = APP_MODE_IDLE;
-  runStage = RUN_STAGE_IDLE;
-  runStageDurationMs = 0U;
-  activeProgramIndex = 0xFFU;
-  runCompleteLatched = 0U;
-  runUsesUserConfig = 0U;
-  appErrorCode = APP_ERROR_NONE;
-  HAL_GPIO_WritePin(LD_Alarm_GPIO_Port, LD_Alarm_Pin, GPIO_PIN_RESET);
-
-  HAL_GPIO_WritePin(SSR_Heater_GPIO_Port, SSR_Heater_Pin, GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(SSR_HResistor_GPIO_Port, SSR_HResistor_Pin, GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(Relay_Pump_GPIO_Port, Relay_Pump_Pin, GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(Relay_Valve_2_GPIO_Port, Relay_Valve_2_Pin, GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(Relay_Valve_3_GPIO_Port, Relay_Valve_3_Pin, GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(Relay_Valve_4_GPIO_Port, Relay_Valve_4_Pin, GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(Relay_Valve_5_GPIO_Port, Relay_Valve_5_Pin, GPIO_PIN_RESET);
-}
-
-static void App_RaiseError(AppErrorCode code)
-{
-  if (code == APP_ERROR_NONE) {
-    return;
-  }
-
-  if (appErrorCode != code) {
-    App_RequestPatternBeep(3U, 500U);
-  }
-
-  appErrorCode = code;
-  HAL_GPIO_WritePin(LD_Alarm_GPIO_Port, LD_Alarm_Pin, GPIO_PIN_SET);
-}
 
 /* USER CODE END 4 */
 
